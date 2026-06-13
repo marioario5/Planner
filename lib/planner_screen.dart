@@ -571,63 +571,50 @@ class _GridBackground extends StatefulWidget {
   State<_GridBackground> createState() => _GridBackgroundState();
 }
 
-class _GridBackgroundState extends State<_GridBackground>
-    with SingleTickerProviderStateMixin {
-  late AnimationController _ctrl;
+class _GridBackgroundState extends State<_GridBackground> {
   final Random _rng = Random();
 
-  // Current offset and angle
   double _ox = 0, _oy = 0, _angle = 12;
-  // Current velocity
   double _vx = 0, _vy = 0, _va = 0;
-  // Target velocity (random walk target)
   double _tvx = 0, _tvy = 0, _tva = 0;
-
-  static const double _maxSpeed = 0.04;
-  static const double _maxAngleSpeed = 0.002;
-  static const double _accel = 0.0008;
-  static const double _changeInterval = 400;
   int _frameCount = 0;
+  bool _running = true;
+
+  static const double _maxSpeed = 0.25;
+  static const double _maxAngleSpeed = 0.003;
+  static const double _accel = 0.002;
+  static const int _changeInterval = 350;
 
   @override
   void initState() {
     super.initState();
-    _ctrl = AnimationController(
-      vsync: this,
-      duration: const Duration(hours: 1),
-    )..repeat();
-    _ctrl.addListener(_tick);
+    _loop();
   }
 
-  void _tick() {
-    setState(() {
-      _frameCount++;
-      // Pick a new target velocity every ~3 seconds
-      if (_frameCount % _changeInterval == 0) {
-        _tvx = (_rng.nextDouble() - 0.5) * 2 * _maxSpeed;
-        _tvy = (_rng.nextDouble() - 0.5) * 2 * _maxSpeed;
-        _tva = (_rng.nextDouble() - 0.5) * 2 * _maxAngleSpeed;
-      }
-      // Smoothly ease velocity toward target
-      _vx += (_tvx - _vx) * _accel;
-      _vy += (_tvy - _vy) * _accel;
-      _va += (_tva - _va) * _accel;
-
-      // Apply velocity
-      _ox += _vx;
-      _oy += _vy;
-      _angle += _va;
-
-      // Wrap offset so it tiles seamlessly
-      _ox = _ox % 32;
-      _oy = _oy % 32;
-    });
+  Future<void> _loop() async {
+    while (_running) {
+      await Future.delayed(const Duration(milliseconds: 32)); // ~30fps
+      if (!mounted || !_running) break;
+      setState(() {
+        _frameCount++;
+        if (_frameCount % _changeInterval == 0) {
+          _tvx = (_rng.nextDouble() - 0.5) * 2 * _maxSpeed;
+          _tvy = (_rng.nextDouble() - 0.5) * 2 * _maxSpeed;
+          _tva = (_rng.nextDouble() - 0.5) * 2 * _maxAngleSpeed;
+        }
+        _vx += (_tvx - _vx) * _accel;
+        _vy += (_tvy - _vy) * _accel;
+        _va += (_tva - _va) * _accel;
+        _ox += _vx;
+        _oy += _vy;
+        _angle = (_angle + _va).clamp(8.0, 16.0);
+      });
+    }
   }
 
   @override
   void dispose() {
-    _ctrl.removeListener(_tick);
-    _ctrl.dispose();
+    _running = false;
     super.dispose();
   }
 
@@ -638,7 +625,6 @@ class _GridBackgroundState extends State<_GridBackground>
         ),
       );
 }
-
 class _GridPainter extends CustomPainter {
   final double ox, oy, angle;
   const _GridPainter({required this.ox, required this.oy, required this.angle});
