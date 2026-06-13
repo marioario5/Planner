@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'dart:math';
+import 'dart:convert';
+import 'package:flutter/services.dart';
 import 'task_model.dart';
 import 'printer_painter.dart';
 import 'tasks_service.dart';
@@ -43,6 +45,7 @@ class _PlannerScreenState extends State<PlannerScreen>
   bool _printed   = false;
   bool _loading   = false;
   String? _error;
+  String _vibe    = 'Matthew 11:29';
 
   List<Task> _tasks = [];
 
@@ -62,11 +65,20 @@ class _PlannerScreenState extends State<PlannerScreen>
 
     // Try silent sign-in on launch
     _trySilentSignIn();
+    _loadVibe();
   }
 
   Future<void> _trySilentSignIn() async {
     final ok = await TasksService.signIn();
     if (ok && mounted) setState(() {});
+  }
+
+  Future<void> _loadVibe() async {
+    final data = await rootBundle.loadString('assets/vibes.json');
+    final json = jsonDecode(data);
+    final vibes = List<String>.from(json['vibes']);
+    final pick = vibes[Random().nextInt(vibes.length)];
+    if (mounted) setState(() => _vibe = pick);
   }
 
   @override
@@ -329,7 +341,7 @@ class _PlannerScreenState extends State<PlannerScreen>
                 // Mood
                 Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                   _moodPip(), const SizedBox(width: 6),
-                  Text('Vibe: cozy & capable',
+                  Text('$_vibe',
                       style: GoogleFonts.pressStart2p(
                           fontSize: 5, color: cInkLight, letterSpacing: 0.5)),
                   const SizedBox(width: 6), _moodPip(),
@@ -537,22 +549,94 @@ class _TaskRow extends StatelessWidget {
 }
 
 // ── Painters & helpers ───────────────────────────────────────────────────────
-class _GridBackground extends StatelessWidget {
+class _GridBackground extends StatefulWidget {
   const _GridBackground();
   @override
-  Widget build(BuildContext context) =>
-      Positioned.fill(child: CustomPaint(painter: _GridPainter()));
+  State<_GridBackground> createState() => _GridBackgroundState();
+}
+
+class _GridBackgroundState extends State<_GridBackground>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _ctrl;
+  final Random _rng = Random();
+
+  // Current offset and angle
+  double _ox = 0, _oy = 0, _angle = 12;
+  // Current velocity
+  double _vx = 0, _vy = 0, _va = 0;
+  // Target velocity (random walk target)
+  double _tvx = 0, _tvy = 0, _tva = 0;
+
+  static const double _maxSpeed = 0.12;
+  static const double _maxAngleSpeed = 0.008;
+  static const double _accel = 0.003;
+  static const double _changeInterval = 180; // frames before new target
+  int _frameCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+      vsync: this,
+      duration: const Duration(hours: 1),
+    )..repeat();
+    _ctrl.addListener(_tick);
+  }
+
+  void _tick() {
+    setState(() {
+      _frameCount++;
+      // Pick a new target velocity every ~3 seconds
+      if (_frameCount % _changeInterval == 0) {
+        _tvx = (_rng.nextDouble() - 0.5) * 2 * _maxSpeed;
+        _tvy = (_rng.nextDouble() - 0.5) * 2 * _maxSpeed;
+        _tva = (_rng.nextDouble() - 0.5) * 2 * _maxAngleSpeed;
+      }
+      // Smoothly ease velocity toward target
+      _vx += (_tvx - _vx) * _accel * 60;
+      _vy += (_tvy - _vy) * _accel * 60;
+      _va += (_tva - _va) * _accel * 60;
+
+      // Apply velocity
+      _ox += _vx;
+      _oy += _vy;
+      _angle += _va;
+
+      // Wrap offset so it tiles seamlessly
+      _ox = _ox % 32;
+      _oy = _oy % 32;
+    });
+  }
+
+  @override
+  void dispose() {
+    _ctrl.removeListener(_tick);
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => Positioned.fill(
+        child: CustomPaint(
+          painter: _GridPainter(ox: _ox, oy: _oy, angle: _angle),
+        ),
+      );
 }
 
 class _GridPainter extends CustomPainter {
+  final double ox, oy, angle;
+  const _GridPainter({required this.ox, required this.oy, required this.angle});
+
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = Colors.black.withOpacity(0.055)..strokeWidth = 1;
+      ..color = Colors.black.withOpacity(0.055)
+      ..strokeWidth = 1;
     canvas.save();
-    final cx = size.width / 2; final cy = size.height / 2;
-    canvas.translate(cx, cy);
-    canvas.rotate(12 * pi / 180);
+    final cx = size.width / 2;
+    final cy = size.height / 2;
+    canvas.translate(cx + ox, cy + oy);
+    canvas.rotate(angle * pi / 180);
     canvas.translate(-cx * 2, -cy * 2);
     for (double x = 0; x < size.width * 4; x += 32)
       canvas.drawLine(Offset(x, 0), Offset(x, size.height * 4), paint);
@@ -560,7 +644,10 @@ class _GridPainter extends CustomPainter {
       canvas.drawLine(Offset(0, y), Offset(size.width * 4, y), paint);
     canvas.restore();
   }
-  @override bool shouldRepaint(_) => false;
+
+  @override
+  bool shouldRepaint(_GridPainter old) =>
+      old.ox != ox || old.oy != oy || old.angle != angle;
 }
 
 class _ScanLinesPainter extends CustomPainter {
