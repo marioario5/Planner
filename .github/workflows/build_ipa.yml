@@ -24,7 +24,7 @@ jobs:
         run: flutter create --platforms=ios . --project-name cozyplanner
 
       - name: Set app icon
-        run: dart run flutter_launcher_icons
+        run: dart run flutter_launcher_icons --flavor ios -p ios
 
       - name: Set app display name
         run: |
