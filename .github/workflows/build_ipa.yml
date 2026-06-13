@@ -23,6 +23,9 @@ jobs:
       - name: Generate iOS project files
         run: flutter create --platforms=ios . --project-name cozyplanner
 
+      - name: Set app icon
+        run: dart run flutter_launcher_icons
+
       - name: Set app display name
         run: |
           /usr/libexec/PlistBuddy -c "Set :CFBundleName Planner" ios/Runner/Info.plist
