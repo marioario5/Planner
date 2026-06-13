@@ -81,6 +81,18 @@ class TasksService {
           if (t.title == null || t.title!.trim().isEmpty) continue;
           if (t.status == 'completed') continue;
 
+          // Filter by due date — only show tasks due today or earlier
+          // Tasks with no due date always show
+          if (t.due != null) {
+            final due = DateTime.tryParse(t.due!);
+            if (due != null) {
+              final today = DateTime.now();
+              final todayDate = DateTime(today.year, today.month, today.day);
+              final dueDate = DateTime(due.year, due.month, due.day);
+              if (dueDate.isAfter(todayDate)) continue; // skip future tasks
+            }
+          }
+
           result.add(Task(
             id: t.id ?? DateTime.now().millisecondsSinceEpoch.toString(),
             listId: list.id!,
@@ -133,17 +145,20 @@ class TasksService {
     final t = title.toLowerCase();
     if (t.contains('meet') || t.contains('call') ||
         t.contains('sync') || t.contains('standup')) return TaskTag.social;
-    if (t.contains('gym') || t.contains('walk') ||
+    if (t.contains('Quiz') || t.contains('Test') ||
         t.contains('run') || t.contains('yoga') ||
-        t.contains('water') || t.contains('plant')) return TaskTag.nature;
-    if (t.contains('lunch') || t.contains('breakfast') ||
+        t.contains('water') || t.contains('plant')) return TaskTag.calculus;
+    if (t.contains('button') || t.contains('panel') ||
         t.contains('dinner') || t.contains('coffee') ||
-        t.contains('read')) return TaskTag.cozy;
+        t.contains('read')) return TaskTag.basketball;
     if (t.contains('clean') || t.contains('tidy') ||
         t.contains('dish') || t.contains('laundry')) return TaskTag.home;
     if (t.contains('email') || t.contains('report') ||
         t.contains('deadline') || t.contains('submit') ||
         t.contains('project')) return TaskTag.work;
+    if (t.contains('rocket') || t.contains('3D Print') ||
+        t.contains('PID') || t.contains('Firmware') ||
+        t.contains('planet')) return TaskTag.rocket;
     return TaskTag.work;
   }
 }

@@ -21,10 +21,10 @@ const Color cBgDark      = Color(0xFFA8966E);
 
 Color tagColor(TaskTag tag) {
   switch (tag) {
-    case TaskTag.cozy:
+    case TaskTag.basketball:
     case TaskTag.social: return cRose;
-    case TaskTag.nature:
-    case TaskTag.wild:   return cSage;
+    case TaskTag.calculus:
+    case TaskTag.rocket:   return cSage;
     case TaskTag.work:
     case TaskTag.home:
     case TaskTag.gold:   return cAmber;
@@ -620,8 +620,10 @@ class _GridBackgroundState extends State<_GridBackground> {
 
   @override
   Widget build(BuildContext context) => Positioned.fill(
-        child: CustomPaint(
-          painter: _GridPainter(ox: _ox, oy: _oy, angle: _angle),
+        child: RepaintBoundary(
+          child: CustomPaint(
+            painter: _GridPainter(ox: _ox, oy: _oy, angle: _angle),
+          ),
         ),
       );
 }

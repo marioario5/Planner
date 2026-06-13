@@ -1,4 +1,4 @@
-enum TaskTag { cozy, nature, work, home, social, wild, gold }
+enum TaskTag { basketball, calculus, work, home, social, rocket, gold }
 
 class Task {
   final String id;
@@ -19,12 +19,12 @@ class Task {
 extension TaskTagLabel on TaskTag {
   String get name {
     switch (this) {
-      case TaskTag.cozy:   return 'cozy';
-      case TaskTag.nature: return 'nature';
+      case TaskTag.basketball: return 'basketball';
+      case TaskTag.calculus: return 'calculus';
       case TaskTag.work:   return 'work';
       case TaskTag.home:   return 'home';
       case TaskTag.social: return 'social';
-      case TaskTag.wild:   return 'wild';
+      case TaskTag.rocket:   return 'rocket';
       case TaskTag.gold:   return 'gold';
     }
   }
