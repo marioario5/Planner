@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:math';
 import 'dart:convert';
 import 'package:flutter/services.dart';
@@ -74,10 +75,25 @@ class _PlannerScreenState extends State<PlannerScreen>
   }
 
   Future<void> _loadVibe() async {
+    final prefs = await SharedPreferences.getInstance();
+    final today = DateTime.now();
+    final todayKey = '${today.year}-${today.month}-${today.day}';
+    final savedDate = prefs.getString('vibe_date');
+    final savedVibe = prefs.getString('vibe_text');
+
+    if (savedDate == todayKey && savedVibe != null) {
+      // Same day — use the saved vibe
+      if (mounted) setState(() => _vibe = savedVibe);
+      return;
+    }
+
+    // New day — pick a fresh one
     final data = await rootBundle.loadString('assets/vibes.json');
     final json = jsonDecode(data);
     final vibes = List<String>.from(json['vibes']);
     final pick = vibes[Random().nextInt(vibes.length)];
+    await prefs.setString('vibe_date', todayKey);
+    await prefs.setString('vibe_text', pick);
     if (mounted) setState(() => _vibe = pick);
   }
 
@@ -567,10 +583,10 @@ class _GridBackgroundState extends State<_GridBackground>
   // Target velocity (random walk target)
   double _tvx = 0, _tvy = 0, _tva = 0;
 
-  static const double _maxSpeed = 0.12;
-  static const double _maxAngleSpeed = 0.008;
-  static const double _accel = 0.003;
-  static const double _changeInterval = 180; // frames before new target
+  static const double _maxSpeed = 0.04;
+  static const double _maxAngleSpeed = 0.002;
+  static const double _accel = 0.0008;
+  static const double _changeInterval = 400;
   int _frameCount = 0;
 
   @override
@@ -593,9 +609,9 @@ class _GridBackgroundState extends State<_GridBackground>
         _tva = (_rng.nextDouble() - 0.5) * 2 * _maxAngleSpeed;
       }
       // Smoothly ease velocity toward target
-      _vx += (_tvx - _vx) * _accel * 60;
-      _vy += (_tvy - _vy) * _accel * 60;
-      _va += (_tva - _va) * _accel * 60;
+      _vx += (_tvx - _vx) * _accel;
+      _vy += (_tvy - _vy) * _accel;
+      _va += (_tva - _va) * _accel;
 
       // Apply velocity
       _ox += _vx;
