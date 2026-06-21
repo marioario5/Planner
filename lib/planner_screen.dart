@@ -21,13 +21,11 @@ const Color cBgDark      = Color(0xFFA8966E);
 
 Color tagColor(TaskTag tag) {
   switch (tag) {
-    case TaskTag.basketball:
-    case TaskTag.social: return cRose;
-    case TaskTag.calculus:
-    case TaskTag.rocket:   return cSage;
-    case TaskTag.work:
-    case TaskTag.home:
-    case TaskTag.gold:   return cAmber;
+    case TaskTag.calculus:  return cRose;
+    case TaskTag.projects:   return cSage;
+    case TaskTag.other: return cSage;
+    case TaskTag.trombone:  return cRose;
+    case TaskTag.korean:   return cAmber;
   }
 }
 

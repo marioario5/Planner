@@ -143,22 +143,16 @@ class TasksService {
 
   static TaskTag _tagFromTitle(String title) {
     final t = title.toLowerCase();
-    if (t.contains('meet') || t.contains('call') ||
-        t.contains('sync') || t.contains('standup')) return TaskTag.social;
-    if (t.contains('Quiz') || t.contains('Test') ||
-        t.contains('run') || t.contains('yoga') ||
+    if (t.contains('korean') || t.contains('Korean') ||
+        t.contains('language') || t.contains('standup')) return TaskTag.korean;
+    if (t.contains('quiz') || t.contains('test') ||
+        t.contains('study') || t.contains('yoga') ||
         t.contains('water') || t.contains('plant')) return TaskTag.calculus;
-    if (t.contains('button') || t.contains('panel') ||
-        t.contains('dinner') || t.contains('coffee') ||
-        t.contains('read')) return TaskTag.basketball;
-    if (t.contains('clean') || t.contains('tidy') ||
-        t.contains('dish') || t.contains('laundry')) return TaskTag.home;
-    if (t.contains('email') || t.contains('report') ||
-        t.contains('deadline') || t.contains('submit') ||
-        t.contains('project')) return TaskTag.work;
+    if (t.contains('practice') || t.contains('music') ||
+        t.contains('scale') || t.contains('symphony')) return TaskTag.trombone;
     if (t.contains('rocket') || t.contains('3D Print') ||
         t.contains('PID') || t.contains('Firmware') ||
-        t.contains('planet')) return TaskTag.rocket;
-    return TaskTag.work;
+        t.contains('plane') || t.contains('Firmware')) return TaskTag.projects;
+    return TaskTag.other;
   }
 }
