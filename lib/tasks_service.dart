@@ -151,8 +151,8 @@ class TasksService {
     if (t.contains('practice') || t.contains('music') ||
         t.contains('scale') || t.contains('symphony')) return TaskTag.trombone;
     if (t.contains('rocket') || t.contains('3D Print') ||
-        t.contains('PID') || t.contains('Firmware') ||
-        t.contains('plane') || t.contains('Firmware')) return TaskTag.projects;
+        t.contains('PID') || t.contains('PCB') ||
+        t.contains('plane') || t.contains('machine')) return TaskTag.projects;
     return TaskTag.other;
   }
 }
