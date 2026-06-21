@@ -144,7 +144,7 @@ class TasksService {
   static TaskTag _tagFromTitle(String title) {
     final t = title.toLowerCase();
     if (t.contains('korean') || t.contains('Korean') ||
-        t.contains('language') || t.contains('standup')) return TaskTag.korean;
+        t.contains('language') || t.contains('learn')) return TaskTag.korean;
     if (t.contains('quiz') || t.contains('test') ||
         t.contains('study') || t.contains('yoga') ||
         t.contains('water') || t.contains('plant')) return TaskTag.calculus;
