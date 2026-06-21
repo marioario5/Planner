@@ -81,15 +81,20 @@ class TasksService {
           if (t.title == null || t.title!.trim().isEmpty) continue;
           if (t.status == 'completed') continue;
 
-          // Filter by due date — only show tasks due today or earlier
-          // Tasks with no due date always show
+          // Filter by due date — only show tasks due exactly today (local time).
+          // Tasks with no due date always show.
           if (t.due != null) {
             final due = DateTime.tryParse(t.due!);
             if (due != null) {
-              final today = DateTime.now();
-              final todayDate = DateTime(today.year, today.month, today.day);
-              final dueDate = DateTime(due.year, due.month, due.day);
-              if (dueDate.isAfter(todayDate)) continue; // skip future tasks
+              // Convert to local time before truncating to a calendar date.
+              // `due` comes back from Google as a UTC instant (e.g. ...Z),
+              // so comparing its raw UTC y/m/d against local "today" can be
+              // off by a day near midnight depending on your timezone.
+              final dueLocal = due.toLocal();
+              final now = DateTime.now();
+              final todayDate = DateTime(now.year, now.month, now.day);
+              final dueDate = DateTime(dueLocal.year, dueLocal.month, dueLocal.day);
+              if (dueDate != todayDate) continue; // skip anything not today
             }
           }
 

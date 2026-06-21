@@ -24,7 +24,7 @@ Color tagColor(TaskTag tag) {
     case TaskTag.calculus:  return cRose;
     case TaskTag.projects:   return cSage;
     case TaskTag.other: return cSage;
-    case TaskTag.trombone:  return cRose;
+    case TaskTag.trombone:  return cSage;
     case TaskTag.korean:   return cAmber;
   }
 }
