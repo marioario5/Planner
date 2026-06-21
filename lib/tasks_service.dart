@@ -81,23 +81,6 @@ class TasksService {
           if (t.title == null || t.title!.trim().isEmpty) continue;
           if (t.status == 'completed') continue;
 
-          // Filter by due date — only show tasks due exactly today (local time).
-          // Tasks with no due date always show.
-          if (t.due != null) {
-            final due = DateTime.tryParse(t.due!);
-            if (due != null) {
-              // Convert to local time before truncating to a calendar date.
-              // `due` comes back from Google as a UTC instant (e.g. ...Z),
-              // so comparing its raw UTC y/m/d against local "today" can be
-              // off by a day near midnight depending on your timezone.
-              final dueLocal = due.toLocal();
-              final now = DateTime.now();
-              final todayDate = DateTime(now.year, now.month, now.day);
-              final dueDate = DateTime(dueLocal.year, dueLocal.month, dueLocal.day);
-              if (dueDate != todayDate) continue; // skip anything not today
-            }
-          }
-
           result.add(Task(
             id: t.id ?? DateTime.now().millisecondsSinceEpoch.toString(),
             listId: list.id!,
