@@ -1,6 +1,10 @@
+import 'dart:convert';
+
 import 'package:google_sign_in/google_sign_in.dart';
 import 'package:googleapis/tasks/v1.dart' as gtasks;
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
+
 import 'task_model.dart';
 
 class _AuthClient extends http.BaseClient {
@@ -50,14 +54,111 @@ class TasksService {
 
   static bool get isSignedIn => currentUser != null;
 
-  /// Fetch incomplete tasks from all of the user's Google Tasks lists.
+  static const _completedTasksCacheKey = 'google_tasks_completed_cache';
+  static final Duration _pstOffset = const Duration(hours: -8);
+
+  static DateTime _nowUtc() => DateTime.now().toUtc();
+
+  static DateTime _pstMidnightUtc(DateTime utc) {
+    final pst = utc.add(_pstOffset);
+    final pstMidnight = DateTime.utc(pst.year, pst.month, pst.day);
+    return pstMidnight.subtract(_pstOffset);
+  }
+
+  static DateTime _endOfPstDayUtc() {
+    final nowUtc = _nowUtc();
+    return _pstMidnightUtc(nowUtc).add(const Duration(days: 1));
+  }
+
+  static String _completedTaskKey(String listId, String taskId) => '$listId|$taskId';
+
+  static Future<Map<String, dynamic>> _loadCompletedTasksCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    final rawJson = prefs.getString(_completedTasksCacheKey);
+    if (rawJson == null) return {};
+
+    try {
+      final decoded = jsonDecode(rawJson);
+      if (decoded is Map<String, dynamic>) return decoded;
+    } catch (_) {
+      // ignore malformed cache
+    }
+    return {};
+  }
+
+  static Future<void> _saveCompletedTasksCache(Map<String, dynamic> cache) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_completedTasksCacheKey, jsonEncode(cache));
+  }
+
+  static TaskTag _tagFromName(String name) {
+    return TaskTag.values.firstWhere(
+      (tag) => tag.name == name,
+      orElse: () => TaskTag.other,
+    );
+  }
+
+  static Task? _taskFromCacheEntry(Map<String, dynamic> entry) {
+    final id = entry['id'] as String?;
+    final listId = entry['listId'] as String?;
+    final label = entry['label'] as String?;
+    final tagName = entry['tag'] as String?;
+    final expiresAt = entry['expiresAt'] as String?;
+    if (id == null || listId == null || label == null || tagName == null || expiresAt == null) {
+      return null;
+    }
+    final expiry = DateTime.tryParse(expiresAt);
+    if (expiry == null || expiry.isBefore(_nowUtc())) return null;
+
+    return Task(
+      id: id,
+      listId: listId,
+      label: label,
+      done: true,
+      tag: _tagFromName(tagName),
+    );
+  }
+
+  static Future<Map<String, dynamic>> _pruneExpiredCompletedTasksCache() async {
+    final cache = await _loadCompletedTasksCache();
+    final nowUtc = _nowUtc();
+    final expiredKeys = <String>[];
+    for (final entry in cache.entries) {
+      final expiresAt = entry.value is Map<String, dynamic>
+          ? entry.value['expiresAt'] as String?
+          : null;
+      if (expiresAt == null) {
+        expiredKeys.add(entry.key);
+        continue;
+      }
+      final expiry = DateTime.tryParse(expiresAt);
+      if (expiry == null || expiry.isBefore(nowUtc)) {
+        expiredKeys.add(entry.key);
+      }
+    }
+    if (expiredKeys.isNotEmpty) {
+      for (final key in expiredKeys) {
+        cache.remove(key);
+      }
+      await _saveCompletedTasksCache(cache);
+    }
+    return cache;
+  }
+
   static Future<List<Task>> fetchTasks() async {
     if (currentUser == null) return [];
 
     try {
+      final cache = await _pruneExpiredCompletedTasksCache();
+      final completedTasks = cache.values
+          .whereType<Map<String, dynamic>>()
+          .map(_taskFromCacheEntry)
+          .whereType<Task>()
+          .toList();
+
       final auth = await currentUser!.authentication;
       final accessToken = auth.accessToken;
-      if (accessToken == null) return [];
+      if (accessToken == null) return completedTasks;
 
       final client = _AuthClient({
         'Authorization': 'Bearer $accessToken',
@@ -65,9 +166,13 @@ class TasksService {
       });
 
       final api = gtasks.TasksApi(client);
-
       final lists = await api.tasklists.list();
       final result = <Task>[];
+      final existingKeys = <String>{};
+
+      for (final task in completedTasks) {
+        existingKeys.add(_completedTaskKey(task.listId, task.id));
+      }
 
       for (final list in lists.items ?? []) {
         if (list.id == null) continue;
@@ -80,15 +185,20 @@ class TasksService {
         for (final t in tasks.items ?? []) {
           if (t.title == null || t.title!.trim().isEmpty) continue;
           if (t.status == 'completed') continue;
+          final taskId = t.id ?? DateTime.now().millisecondsSinceEpoch.toString();
+          final taskKey = _completedTaskKey(list.id!, taskId);
+          if (existingKeys.contains(taskKey)) continue;
 
           result.add(Task(
-            id: t.id ?? DateTime.now().millisecondsSinceEpoch.toString(),
+            id: taskId,
             listId: list.id!,
             label: t.title!,
             tag: _tagFromTitle(t.title!),
           ));
         }
       }
+
+      result.addAll(completedTasks);
       return result;
     } catch (e) {
       print('Tasks fetch error: $e');
@@ -96,9 +206,6 @@ class TasksService {
     }
   }
 
-  /// Marks a task as completed (or not) directly in Google Tasks.
-  /// This is the same store Google Calendar's task list reads from,
-  /// so checking a task off here also checks it off in Calendar.
   static Future<bool> setTaskCompleted(Task task, bool completed) async {
     if (currentUser == null) return false;
 
@@ -113,7 +220,6 @@ class TasksService {
       });
 
       final api = gtasks.TasksApi(client);
-
       final patch = gtasks.Task(
         status: completed ? 'completed' : 'needsAction',
       );
@@ -122,6 +228,22 @@ class TasksService {
       }
 
       await api.tasks.patch(patch, task.listId, task.id);
+
+      final cache = await _loadCompletedTasksCache();
+      final key = _completedTaskKey(task.listId, task.id);
+      if (completed) {
+        cache[key] = {
+          'id': task.id,
+          'listId': task.listId,
+          'label': task.label,
+          'tag': task.tag.name,
+          'expiresAt': _endOfPstDayUtc().toIso8601String(),
+        };
+      } else {
+        cache.remove(key);
+      }
+      await _saveCompletedTasksCache(cache);
+
       return true;
     } catch (e) {
       print('Task update error: $e');
@@ -132,15 +254,23 @@ class TasksService {
   static TaskTag _tagFromTitle(String title) {
     final t = title.toLowerCase();
     if (t.contains('korean') || t.contains('Korean') ||
-        t.contains('language') || t.contains('learn')) return TaskTag.korean;
+        t.contains('language') || t.contains('learn')) {
+      return TaskTag.korean;
+    }
     if (t.contains('quiz') || t.contains('test') ||
         t.contains('study') || t.contains('yoga') ||
-        t.contains('water') || t.contains('plant')) return TaskTag.calculus;
+        t.contains('water') || t.contains('plant')) {
+      return TaskTag.calculus;
+    }
     if (t.contains('practice') || t.contains('music') ||
-        t.contains('scale') || t.contains('symphony')) return TaskTag.trombone;
+        t.contains('scale') || t.contains('trombone')) {
+      return TaskTag.trombone;
+    }
     if (t.contains('rocket') || t.contains('3D Print') ||
         t.contains('PID') || t.contains('PCB') ||
-        t.contains('plane') || t.contains('machine')) return TaskTag.projects;
+        t.contains('plane') || t.contains('machine')) {
+      return TaskTag.projects;
+    }
     return TaskTag.other;
   }
 }

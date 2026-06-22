@@ -38,13 +38,13 @@ class PrinterPainter extends CustomPainter {
   void paint(Canvas canvas, Size size) {
     // Body fill
     canvas.drawRect(
-      Rect.fromLTWH(0, 4 * P, 80 * P, 20 * P),
+      const Rect.fromLTWH(0, 4 * P, 80 * P, 20 * P),
       Paint()..color = base,
     );
 
     // Top strip highlight
-    canvas.drawRect(Rect.fromLTWH(0, 0, 80 * P, 3 * P), Paint()..color = light);
-    canvas.drawRect(Rect.fromLTWH(0, 3 * P, 80 * P, P), Paint()..color = body);
+    canvas.drawRect(const Rect.fromLTWH(0, 0, 80 * P, 3 * P), Paint()..color = light);
+    canvas.drawRect(const Rect.fromLTWH(0, 3 * P, 80 * P, P), Paint()..color = body);
 
     // Edge highlights
     for (int row = 0; row < 24; row++) {

@@ -4,7 +4,6 @@ import 'package:google_fonts/google_fonts.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'dart:math';
 import 'dart:convert';
-import 'package:flutter/services.dart';
 import 'task_model.dart';
 import 'printer_painter.dart';
 import 'tasks_service.dart';
@@ -16,14 +15,16 @@ const Color cInkLight    = Color(0xFF5C3D1E);
 const Color cRose        = Color(0xFFE8A0A0);
 const Color cSage        = Color(0xFF8BAF7C);
 const Color cAmber       = Color(0xFFD4A843);
+const Color cTeal        = Color(0xFF6C8EBF);
+const Color cLavender    = Color(0xFF9C7BBC );
 const Color cBg          = Color(0xFFC8B89A);
 const Color cBgDark      = Color(0xFFA8966E);
 
 Color tagColor(TaskTag tag) {
   switch (tag) {
     case TaskTag.calculus:  return cRose;
-    case TaskTag.projects:   return cSage;
-    case TaskTag.other: return cSage;
+    case TaskTag.projects:   return cTeal;
+    case TaskTag.other: return cLavender;
     case TaskTag.trombone:  return cSage;
     case TaskTag.korean:   return cAmber;
   }
@@ -193,7 +194,7 @@ class _PlannerScreenState extends State<PlannerScreen>
                 '✦ daily tasks ✦',
                 style: GoogleFonts.pressStart2p(
                   fontSize: 7,
-                  color: const Color(0xFF4A3728).withOpacity(0.55),
+                  color: const Color(0xFF4A3728).withValues(alpha: 0.55),
                   letterSpacing: 2,
                 ),
               ),
@@ -249,7 +250,7 @@ class _PlannerScreenState extends State<PlannerScreen>
                         textAlign: TextAlign.center,
                         style: GoogleFonts.pressStart2p(
                           fontSize: 6,
-                          color: const Color(0xFF4A3728).withOpacity(0.4),
+                          color: const Color(0xFF4A3728).withValues(alpha: 0.4),
                           height: 2,
                         ),
                       ),
@@ -355,7 +356,7 @@ class _PlannerScreenState extends State<PlannerScreen>
                 // Mood
                 Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                   _moodPip(), const SizedBox(width: 6),
-                  Text('$_vibe',
+                  Text(_vibe,
                       style: GoogleFonts.pressStart2p(
                           fontSize: 5, color: cInkLight, letterSpacing: 0.5)),
                   const SizedBox(width: 6), _moodPip(),
@@ -441,7 +442,7 @@ class _PlannerScreenState extends State<PlannerScreen>
           child: Container(
             width: 234, height: 8,
             decoration: BoxDecoration(
-              color: Colors.black.withOpacity(0.12),
+              color: Colors.black.withValues(alpha: 0.12),
               borderRadius: BorderRadius.circular(4),
             ),
           ),
@@ -457,7 +458,7 @@ class _PlannerScreenState extends State<PlannerScreen>
       border: Border(
         left:  const BorderSide(color: cPaperShadow, width: 4),
         right: const BorderSide(color: cPaperShadow, width: 4),
-        top:   BorderSide(color: cPaperShadow.withOpacity(0.5), width: 2),
+        top:   BorderSide(color: cPaperShadow.withValues(alpha: 0.5), width: 2),
       ),
     ),
     child: Row(children: [
@@ -509,7 +510,7 @@ class _TaskRow extends StatelessWidget {
       direction: DismissDirection.endToStart,
       onDismissed: (_) => onDelete(),
       background: Container(
-        color: cRose.withOpacity(0.3),
+        color: cRose.withValues(alpha: 0.3),
         alignment: Alignment.centerRight,
         padding: const EdgeInsets.only(right: 12),
         child: Text('✕',
@@ -537,11 +538,11 @@ class _TaskRow extends StatelessWidget {
               child: Text(task.label,
                 style: GoogleFonts.pressStart2p(
                   fontSize: 6,
-                  color: task.done ? cInkLight.withOpacity(0.6) : cInk,
+                  color: task.done ? cInkLight.withValues(alpha: 0.6) : cInk,
                   height: 1.9,
                   decoration: task.done
                       ? TextDecoration.lineThrough : TextDecoration.none,
-                  decorationColor: cInkLight.withOpacity(0.6),
+                  decorationColor: cInkLight.withValues(alpha: 0.6),
                 ),
               ),
             ),
@@ -632,7 +633,7 @@ class _GridPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
     final paint = Paint()
-      ..color = Colors.black.withOpacity(0.055)
+      ..color = Colors.black.withValues(alpha: 0.055)
       ..strokeWidth = 1;
     canvas.save();
     final cx = size.width / 2;
@@ -640,10 +641,12 @@ class _GridPainter extends CustomPainter {
     canvas.translate(cx + ox, cy + oy);
     canvas.rotate(angle * pi / 180);
     canvas.translate(-cx * 2, -cy * 2);
-    for (double x = 0; x < size.width * 4; x += 32)
+    for (double x = 0; x < size.width * 4; x += 32) {
       canvas.drawLine(Offset(x, 0), Offset(x, size.height * 4), paint);
-    for (double y = 0; y < size.height * 4; y += 32)
+    }
+    for (double y = 0; y < size.height * 4; y += 32) {
       canvas.drawLine(Offset(0, y), Offset(size.width * 4, y), paint);
+    }
     canvas.restore();
   }
 
@@ -655,9 +658,10 @@ class _GridPainter extends CustomPainter {
 class _ScanLinesPainter extends CustomPainter {
   @override
   void paint(Canvas canvas, Size size) {
-    final p = Paint()..color = Colors.black.withOpacity(0.018);
-    for (double y = 7; y < size.height; y += 8)
+    final p = Paint()..color = Colors.black.withValues(alpha: 0.018);
+    for (double y = 7; y < size.height; y += 8) {
       canvas.drawRect(Rect.fromLTWH(0, y, size.width, 1), p);
+    }
   }
   @override bool shouldRepaint(_) => false;
 }
@@ -669,8 +673,9 @@ class _TearPainter extends CustomPainter {
     const segs = 25;
     final segW = size.width / segs;
     path.moveTo(0, 0);
-    for (int i = 0; i <= segs; i++)
+    for (int i = 0; i <= segs; i++) {
       path.lineTo(i * segW, i.isEven ? size.height : 0);
+    }
     path.lineTo(size.width, 0);
     path.close();
     canvas.drawPath(path, Paint()..color = cPaper);
@@ -702,10 +707,10 @@ class _DecoScene extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final decos = [
-      _D('☕', 0.02, 0.38, -14, 1.1),  _D('🌵', 0.05, 0.65, 8,   0.95),
-      _D('🕯️', 0.78, 0.30, 12,  1.0),  _D('🍪', 0.82, 0.60, -9,  1.05),
-      _D('📓', 0.06, 0.82, -18, 0.9),  _D('🌿', 0.80, 0.80, 22,  1.1),
-      _D('⭐', 0.88, 0.12, -5,  0.8),  _D('🍵', 0.01, 0.14, 10,  0.85),
+      const _D('☕', 0.02, 0.38, -14, 1.1),  const _D('🌵', 0.05, 0.65, 8,   0.95),
+      const _D('🕯️', 0.78, 0.30, 12,  1.0),  const _D('🍪', 0.82, 0.60, -9,  1.05),
+      const _D('📓', 0.06, 0.82, -18, 0.9),  const _D('🌿', 0.80, 0.80, 22,  1.1),
+      const _D('⭐', 0.88, 0.12, -5,  0.8),  const _D('🍵', 0.01, 0.14, 10,  0.85),
     ];
     return Positioned.fill(
       child: IgnorePointer(
