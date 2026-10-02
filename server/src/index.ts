@@ -22,6 +22,9 @@ const apiView = (t: Task) => ({
   date: t.date,
   title: t.title,
   tag: t.tag,
+  start: t.start,
+  minutes: t.minutes,
+  notes: t.notes,
   done: t.done,
   position: t.position,
 });
@@ -31,7 +34,7 @@ const apiView = (t: Task) => ({
  *   POST   /mcp            MCP endpoint (Authorization: Bearer <token>)
  *   POST   /mcp/<token>    MCP endpoint for clients that can't send headers (claude.ai connectors)
  *   GET    /api/tasks?date=YYYY-MM-DD
- *   PATCH  /api/tasks/:id  {done?, title?, tag?}
+ *   PATCH  /api/tasks/:id  {done?, title?, tag?, start?, minutes?, notes?}
  *   DELETE /api/tasks/:id
  */
 export async function handleRequest(

@@ -33,13 +33,30 @@ const dateProp = {
   description: 'Planner day as YYYY-MM-DD. Defaults to today in the planner time zone.',
 };
 const tagProp = { type: 'string', enum: [...TAGS], description: TAG_HELP };
-const titleProp = { type: 'string', minLength: 1, maxLength: 200 };
+const titleProp = {
+  type: 'string',
+  minLength: 1,
+  maxLength: 200,
+  description: 'Short title that fits on one or two lines. Put the time in start, not here.',
+};
+const startProp = {
+  type: 'string',
+  pattern: '^([01]\d|2[0-3]):[0-5]\d$',
+  description: '24-hour start time, e.g. "15:30". Leave out for untimed tasks (shown last).',
+};
+const minutesProp = { type: 'integer', minimum: 1, maximum: 1440, description: 'Planned length in minutes.' };
+const notesProp = {
+  type: 'string',
+  maxLength: 1000,
+  description:
+    'Detail shown when he taps the task: start move, if-then cue, method, stop time and break.',
+};
 
 const TOOLS = [
   {
     name: 'set_daily_plan',
     description:
-      "Replace the whole task list for a day with the given tasks, in order. Use this to publish a day's plan. " +
+      "Replace the whole task list for a day with the given tasks. Use this to publish a day's plan. Timed tasks are shown in clock order, then untimed ones in the order given. " +
       'Tasks the user already checked off stay checked if they appear again with the same title. ' +
       'Pass an empty array to clear the day.',
     inputSchema: {
@@ -51,7 +68,13 @@ const TOOLS = [
           maxItems: 100,
           items: {
             type: 'object',
-            properties: { title: titleProp, tag: tagProp },
+            properties: {
+              title: titleProp,
+              tag: tagProp,
+              start: startProp,
+              minutes: minutesProp,
+              notes: notesProp,
+            },
             required: ['title'],
           },
         },
@@ -71,20 +94,32 @@ const TOOLS = [
     description: "Append one task to the end of a day's list.",
     inputSchema: {
       type: 'object',
-      properties: { date: dateProp, title: titleProp, tag: tagProp },
+      properties: {
+        date: dateProp,
+        title: titleProp,
+        tag: tagProp,
+        start: startProp,
+        minutes: minutesProp,
+        notes: notesProp,
+      },
       required: ['title'],
     },
     annotations: { destructiveHint: false },
   },
   {
     name: 'update_task',
-    description: "Change a task's title or tag, or mark it done / not done. Get ids from list_tasks.",
+    description:
+      "Change a task's title, tag, time, length or notes, or mark it done / not done. " +
+      'Pass null for start, minutes or notes to clear them. Get ids from list_tasks.',
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string' },
         title: titleProp,
         tag: tagProp,
+        start: { ...startProp, type: ['string', 'null'] },
+        minutes: { ...minutesProp, type: ['integer', 'null'] },
+        notes: { ...notesProp, type: ['string', 'null'] },
         done: { type: 'boolean' },
       },
       required: ['id'],
@@ -107,7 +142,15 @@ export interface McpContext {
 
 type Json = Record<string, unknown>;
 
-const view = (t: Task) => ({ id: t.id, title: t.title, tag: t.tag, done: t.done });
+const view = (t: Task) => ({
+  id: t.id,
+  title: t.title,
+  tag: t.tag,
+  start: t.start,
+  minutes: t.minutes,
+  notes: t.notes,
+  done: t.done,
+});
 
 function summarize(date: string, tasks: Task[]): Json {
   return {

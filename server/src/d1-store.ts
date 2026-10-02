@@ -12,6 +12,9 @@ interface Row {
   date: string;
   title: string;
   tag: string;
+  start_time: string | null;
+  minutes: number | null;
+  notes: string | null;
   done: number;
   position: number;
   created_at: string;
@@ -24,6 +27,9 @@ function toTask(row: Row): Task {
     date: row.date,
     title: row.title,
     tag: row.tag as Tag,
+    start: row.start_time,
+    minutes: row.minutes,
+    notes: row.notes,
     done: row.done === 1,
     position: row.position,
     createdAt: row.created_at,
@@ -38,7 +44,11 @@ export class D1TaskStore implements TaskStore {
 
   async list(date: string): Promise<Task[]> {
     const { results } = await this.db
-      .prepare('SELECT * FROM tasks WHERE date = ? ORDER BY position, created_at')
+      .prepare(
+        // Timed tasks in clock order, untimed last, then the order Claude listed them.
+        `SELECT * FROM tasks WHERE date = ?
+         ORDER BY start_time IS NULL, start_time, position, created_at`,
+      )
       .bind(date)
       .all<Row>();
     return results.map(toTask);
@@ -48,11 +58,21 @@ export class D1TaskStore implements TaskStore {
     const id = newId();
     await this.db
       .prepare(
-        `INSERT INTO tasks (id, date, title, tag, done, position, created_at)
-         VALUES (?, ?, ?, ?, 0,
+        `INSERT INTO tasks (id, date, title, tag, start_time, minutes, notes, done, position, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0,
                  (SELECT COALESCE(MAX(position), -1) + 1 FROM tasks WHERE date = ?), ?)`,
       )
-      .bind(id, date, task.title, task.tag, date, new Date().toISOString())
+      .bind(
+        id,
+        date,
+        task.title,
+        task.tag,
+        task.start,
+        task.minutes,
+        task.notes,
+        date,
+        new Date().toISOString(),
+      )
       .run();
     return (await this.get(id))!;
   }
@@ -72,14 +92,17 @@ export class D1TaskStore implements TaskStore {
       statements.push(
         this.db
           .prepare(
-            `INSERT INTO tasks (id, date, title, tag, done, position, created_at, completed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT INTO tasks (id, date, title, tag, start_time, minutes, notes, done, position, created_at, completed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .bind(
             newId(),
             date,
             task.title,
             task.tag,
+            task.start,
+            task.minutes,
+            task.notes,
             wasDone ? 1 : 0,
             position,
             now,
@@ -101,6 +124,18 @@ export class D1TaskStore implements TaskStore {
     if (patch.tag !== undefined) {
       sets.push('tag = ?');
       values.push(patch.tag);
+    }
+    if (patch.start !== undefined) {
+      sets.push('start_time = ?');
+      values.push(patch.start);
+    }
+    if (patch.minutes !== undefined) {
+      sets.push('minutes = ?');
+      values.push(patch.minutes);
+    }
+    if (patch.notes !== undefined) {
+      sets.push('notes = ?');
+      values.push(patch.notes);
     }
     if (patch.done !== undefined) {
       sets.push('done = ?', 'completed_at = ?');

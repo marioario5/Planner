@@ -14,13 +14,19 @@ Claude routine ──MCP──▶  Worker + D1  ◀──REST──  Flutter app
 
 | Tool | What it does |
 | --- | --- |
-| `set_daily_plan` | Replace a day's list with `tasks: [{title, tag?}]`. Re-publishing keeps tasks checked off if the title matches. |
+| `set_daily_plan` | Replace a day's list with `tasks: [{title, tag?, start?, minutes?, notes?}]`. Re-publishing keeps tasks checked off if the title matches. |
 | `list_tasks` | The day's tasks with ids and `done` flags. |
 | `add_task` | Append one task. |
-| `update_task` | Change title / tag, or set `done`. |
+| `update_task` | Change title / tag / time / notes, or set `done`. Pass `null` to clear `start`, `minutes` or `notes`. |
 | `delete_task` | Remove a task. |
 
 `tag` is one of `school`, `calculus3`, `sat`, `pcb`, `photography` (the app's colour tags; defaults to `school`).
+Each task can carry a time and detail, so titles stay short:
+
+- `start`: 24-hour `HH:MM` (e.g. `15:30`). Timed tasks are shown in clock order; untimed ones come last, in the order given.
+- `minutes`: planned length, shown next to the time (`3:30pm · 25m`).
+- `notes`: detail behind a "+ how to start" tap in the app (start move, if-then cue, method, break).
+
 `date` is optional everywhere and defaults to today in `PLANNER_TZ` (see `wrangler.toml`).
 
 ## Deploy
@@ -37,6 +43,15 @@ npm run deploy                          # prints https://cozy-planner.<you>.work
 openssl rand -hex 24                    # your token — save it somewhere
 npx wrangler secret put API_TOKEN       # paste the token
 ```
+
+**Upgrading a database made before times/notes existed** (one time):
+
+```bash
+npm run db:migrate:remote
+npm run deploy
+```
+
+Run the migration before deploying. A brand-new database only needs `db:init:remote`.
 
 Until `API_TOKEN` is set (16+ characters) every endpoint except `/` answers 500, so a half-deployed
 server is never open.
@@ -72,6 +87,6 @@ Tap **CONNECT & PRINT** (or long-press the printer any time) and enter the worke
 npm test                 # vitest, in-memory store
 npm run typecheck
 echo "API_TOKEN=dev-token-0123456789abcdef" > .dev.vars   # gitignored
-npm run db:init:local
+npm run db:init:local     # new local db; `db:migrate:local` upgrades an old one
 npm run dev              # http://localhost:8787
 ```

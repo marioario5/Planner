@@ -584,18 +584,30 @@ class _PlannerScreenState extends State<PlannerScreen>
 }
 
 // ── Task Row ────────────────────────────────────────────────────────────────
-class _TaskRow extends StatelessWidget {
+class _TaskRow extends StatefulWidget {
   final Task task;
   final VoidCallback onToggle;
   final VoidCallback onDelete;
   const _TaskRow({required this.task, required this.onToggle, required this.onDelete});
 
   @override
+  State<_TaskRow> createState() => _TaskRowState();
+}
+
+class _TaskRowState extends State<_TaskRow> {
+  bool _showNotes = false;
+
+  @override
   Widget build(BuildContext context) {
+    final task = widget.task;
+    final dim = cInkLight.withValues(alpha: 0.6);
+    final timeLabel = task.timeLabel;
+    final hasNotes = task.notes != null;
+
     return Dismissible(
       key: ValueKey(task.id),
       direction: DismissDirection.endToStart,
-      onDismissed: (_) => onDelete(),
+      onDismissed: (_) => widget.onDelete(),
       background: Container(
         color: cRose.withValues(alpha: 0.3),
         alignment: Alignment.centerRight,
@@ -604,7 +616,8 @@ class _TaskRow extends StatelessWidget {
             style: GoogleFonts.pressStart2p(fontSize: 8, color: cRose)),
       ),
       child: GestureDetector(
-        onTap: onToggle,
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onToggle,
         child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 5),
           child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -622,15 +635,58 @@ class _TaskRow extends StatelessWidget {
             ),
             const SizedBox(width: 10),
             Expanded(
-              child: Text(task.label,
-                style: GoogleFonts.pressStart2p(
-                  fontSize: 6,
-                  color: task.done ? cInkLight.withValues(alpha: 0.6) : cInk,
-                  height: 1.9,
-                  decoration: task.done
-                      ? TextDecoration.lineThrough : TextDecoration.none,
-                  decorationColor: cInkLight.withValues(alpha: 0.6),
-                ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  if (timeLabel != null)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 3),
+                      child: Text(timeLabel,
+                        style: GoogleFonts.pressStart2p(
+                          fontSize: 5,
+                          color: task.done ? dim : tagColor(task.tag),
+                          letterSpacing: 0.5,
+                        ),
+                      ),
+                    ),
+                  Text(task.label,
+                    style: GoogleFonts.pressStart2p(
+                      fontSize: 6,
+                      color: task.done ? dim : cInk,
+                      height: 1.9,
+                      decoration: task.done
+                          ? TextDecoration.lineThrough : TextDecoration.none,
+                      decorationColor: dim,
+                    ),
+                  ),
+                  if (hasNotes)
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => setState(() => _showNotes = !_showNotes),
+                      child: Padding(
+                        padding: const EdgeInsets.only(top: 3, bottom: 2),
+                        child: Text(_showNotes ? '- hide how' : '+ how to start',
+                          style: GoogleFonts.pressStart2p(
+                              fontSize: 5, color: cInkLight, height: 1.6),
+                        ),
+                      ),
+                    ),
+                  if (hasNotes && _showNotes)
+                    Container(
+                      width: double.infinity,
+                      margin: const EdgeInsets.only(top: 2, bottom: 2),
+                      padding: const EdgeInsets.only(left: 6),
+                      decoration: BoxDecoration(
+                        border: Border(
+                          left: BorderSide(color: tagColor(task.tag), width: 2),
+                        ),
+                      ),
+                      child: Text(task.notes!,
+                        style: GoogleFonts.pressStart2p(
+                            fontSize: 5, color: cInkLight, height: 2),
+                      ),
+                    ),
+                ],
               ),
             ),
             const SizedBox(width: 6),

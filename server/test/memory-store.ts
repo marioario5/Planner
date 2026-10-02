@@ -12,11 +12,17 @@ export class MemoryTaskStore implements TaskStore {
   private seq = 0;
 
   async list(date: string): Promise<Task[]> {
-    return this.tasks.filter((t) => t.date === date).sort((a, b) => a.position - b.position);
+    return this.tasks
+      .filter((t) => t.date === date)
+      .sort((a, b) => {
+        if ((a.start === null) !== (b.start === null)) return a.start === null ? 1 : -1;
+        if (a.start !== b.start) return (a.start ?? '') < (b.start ?? '') ? -1 : 1;
+        return a.position - b.position;
+      });
   }
 
   async add(date: string, task: NewTask): Promise<Task> {
-    const position = (await this.list(date)).length;
+    const position = this.tasks.filter((t) => t.date === date).length;
     return this.insert(date, task, position, false);
   }
 
@@ -32,6 +38,9 @@ export class MemoryTaskStore implements TaskStore {
     if (!task) return null;
     if (patch.title !== undefined) task.title = patch.title;
     if (patch.tag !== undefined) task.tag = patch.tag;
+    if (patch.start !== undefined) task.start = patch.start;
+    if (patch.minutes !== undefined) task.minutes = patch.minutes;
+    if (patch.notes !== undefined) task.notes = patch.notes;
     if (patch.done !== undefined) {
       task.done = patch.done;
       task.completedAt = patch.done ? new Date().toISOString() : null;
@@ -51,6 +60,9 @@ export class MemoryTaskStore implements TaskStore {
       date,
       title: task.title,
       tag: task.tag,
+      start: task.start,
+      minutes: task.minutes,
+      notes: task.notes,
       done,
       position,
       createdAt: new Date().toISOString(),

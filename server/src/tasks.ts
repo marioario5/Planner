@@ -9,6 +9,10 @@ export interface Task {
   date: string; // planner day, YYYY-MM-DD
   title: string;
   tag: Tag;
+  /** 24-hour "HH:MM" in the planner's time zone, or null for untimed tasks. */
+  start: string | null;
+  minutes: number | null;
+  notes: string | null;
   done: boolean;
   position: number;
   createdAt: string;
@@ -18,15 +22,23 @@ export interface Task {
 export interface NewTask {
   title: string;
   tag: Tag;
+  start: string | null;
+  minutes: number | null;
+  notes: string | null;
 }
 
+/** For start/minutes/notes: undefined = leave alone, null = clear. */
 export interface TaskPatch {
   title?: string;
   tag?: Tag;
+  start?: string | null;
+  minutes?: number | null;
+  notes?: string | null;
   done?: boolean;
 }
 
 export interface TaskStore {
+  /** Timed tasks in clock order, then untimed tasks in the order they were given. */
   list(date: string): Promise<Task[]>;
   add(date: string, task: NewTask): Promise<Task>;
   /** Replaces a day's list. Tasks whose title matches one already done stay done. */
@@ -38,6 +50,7 @@ export interface TaskStore {
 export class ValidationError extends Error {}
 
 const MAX_TITLE = 200;
+const MAX_NOTES = 1000;
 const MAX_TASKS_PER_DAY = 100;
 
 export function parseTitle(value: unknown): string {
@@ -59,12 +72,44 @@ export function parseTag(value: unknown): Tag {
   throw new ValidationError(`tag must be one of: ${TAGS.join(', ')}`);
 }
 
+export function parseStart(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' || !/^([01]\d|2[0-3]):[0-5]\d$/.test(value)) {
+    throw new ValidationError('start must be 24-hour HH:MM, like 15:30');
+  }
+  return value;
+}
+
+export function parseMinutes(value: unknown): number | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 1440) {
+    throw new ValidationError('minutes must be a whole number from 1 to 1440');
+  }
+  return value;
+}
+
+export function parseNotes(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== 'string') throw new ValidationError('notes must be a string');
+  const notes = value.trim();
+  if (notes.length > MAX_NOTES) {
+    throw new ValidationError(`notes must be at most ${MAX_NOTES} characters`);
+  }
+  return notes === '' ? null : notes;
+}
+
 export function parseNewTask(value: unknown): NewTask {
   if (typeof value !== 'object' || value === null) {
     throw new ValidationError('each task must be an object with a title');
   }
-  const { title, tag } = value as Record<string, unknown>;
-  return { title: parseTitle(title), tag: parseTag(tag) };
+  const { title, tag, start, minutes, notes } = value as Record<string, unknown>;
+  return {
+    title: parseTitle(title),
+    tag: parseTag(tag),
+    start: parseStart(start),
+    minutes: parseMinutes(minutes),
+    notes: parseNotes(notes),
+  };
 }
 
 export function parseNewTasks(value: unknown): NewTask[] {
@@ -79,16 +124,19 @@ export function parsePatch(value: unknown): TaskPatch {
   if (typeof value !== 'object' || value === null) {
     throw new ValidationError('patch must be an object');
   }
-  const { title, tag, done } = value as Record<string, unknown>;
+  const { title, tag, done, start, minutes, notes } = value as Record<string, unknown>;
   const patch: TaskPatch = {};
   if (title !== undefined) patch.title = parseTitle(title);
   if (tag !== undefined) patch.tag = parseTag(tag);
+  if (start !== undefined) patch.start = parseStart(start);
+  if (minutes !== undefined) patch.minutes = parseMinutes(minutes);
+  if (notes !== undefined) patch.notes = parseNotes(notes);
   if (done !== undefined) {
     if (typeof done !== 'boolean') throw new ValidationError('done must be true or false');
     patch.done = done;
   }
   if (Object.keys(patch).length === 0) {
-    throw new ValidationError('nothing to update: pass title, tag, or done');
+    throw new ValidationError('nothing to update: pass title, tag, start, minutes, notes, or done');
   }
   return patch;
 }

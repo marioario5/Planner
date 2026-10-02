@@ -81,7 +81,7 @@ class TasksService {
     return TasksException('server error (${res.statusCode})');
   }
 
-  /// Today's tasks, in the order Claude listed them, including ones already
+  /// Today's tasks (timed ones in clock order, untimed last), including ones already
   /// checked off. Throws [TasksException] if the server can't be reached.
   static Future<List<Task>> fetchTasks() async {
     if (!isConfigured) throw const TasksException('not connected');
@@ -100,6 +100,9 @@ class TasksService {
                 label: t['title'] as String,
                 done: t['done'] as bool,
                 tag: _tagFromName(t['tag'] as String?),
+                start: t['start'] as String?,
+                minutes: t['minutes'] as int?,
+                notes: t['notes'] as String?,
               ))
           .toList();
     } on TasksException {

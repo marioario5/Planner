@@ -211,6 +211,99 @@ describe('mcp tools', () => {
   });
 });
 
+describe('times and notes', () => {
+  it('orders timed tasks by clock, then untimed in the order given', async () => {
+    const { data } = await tool('set_daily_plan', {
+      tasks: [
+        { title: 'Tonight wrap-up' },
+        { title: 'SAT module', start: '16:30', minutes: 40, tag: 'sat' },
+        { title: 'Ask teacher about quiz' },
+        { title: 'Calc 3 problems', start: '15:30', minutes: 25, tag: 'calculus3', notes: 'Start: open Sec 6.2. If 3:30 and at desk, then go.' },
+        { title: 'Photo walk', start: '17:35', minutes: 20, tag: 'photography' },
+      ],
+    });
+    expect(data.tasks.map((t: any) => t.title)).toEqual([
+      'Calc 3 problems',
+      'SAT module',
+      'Photo walk',
+      'Tonight wrap-up',
+      'Ask teacher about quiz',
+    ]);
+    expect(data.tasks[0]).toMatchObject({ start: '15:30', minutes: 25 });
+    expect(data.tasks[0].notes).toContain('If 3:30');
+    expect(data.tasks[3]).toMatchObject({ start: null, minutes: null, notes: null });
+  });
+
+  it('slots a newly added timed task into clock order', async () => {
+    await tool('set_daily_plan', { tasks: [{ title: 'Early', start: '15:00' }, { title: 'Late', start: '18:00' }] });
+    await tool('add_task', { title: 'Middle', start: '16:30', minutes: 30 });
+    const list = await tool('list_tasks', {});
+    expect(list.data.tasks.map((t: any) => t.title)).toEqual(['Early', 'Middle', 'Late']);
+  });
+
+  it('sets and clears time, length and notes with update_task', async () => {
+    const { data } = await tool('add_task', { title: 'Essay' });
+    const id = data.added.id;
+    const set = await tool('update_task', { id, start: '19:00', minutes: 45, notes: 'Write the intro' });
+    expect(set.data.updated).toMatchObject({ start: '19:00', minutes: 45, notes: 'Write the intro' });
+
+    const cleared = await tool('update_task', { id, start: null, minutes: null, notes: null });
+    expect(cleared.data.updated).toMatchObject({ start: null, minutes: null, notes: null });
+    const titleOnly = await tool('update_task', { id, title: 'Essay v2' });
+    expect(titleOnly.data.updated).toMatchObject({ title: 'Essay v2', start: null });
+  });
+
+  it('keeps time and notes when only done changes', async () => {
+    const { data } = await tool('set_daily_plan', { tasks: [{ title: 'A', start: '15:30', minutes: 20, notes: 'n' }] });
+    const done = await tool('update_task', { id: data.tasks[0].id, done: true });
+    expect(done.data.updated).toMatchObject({ start: '15:30', minutes: 20, notes: 'n', done: true });
+  });
+
+  it('keeps done state across a re-publish even when times change', async () => {
+    const first = await tool('set_daily_plan', { tasks: [{ title: 'Calc 3', start: '15:30' }] });
+    await tool('update_task', { id: first.data.tasks[0].id, done: true });
+    const again = await tool('set_daily_plan', { tasks: [{ title: 'Calc 3', start: '16:00', minutes: 30 }] });
+    expect(again.data.tasks[0]).toMatchObject({ start: '16:00', minutes: 30, done: true });
+  });
+
+  it('rejects bad times, lengths and notes as tool errors', async () => {
+    for (const bad of ['3:30pm', '24:00', '15:60', '1530', 1530]) {
+      expect((await tool('add_task', { title: 'x', start: bad })).isError).toBe(true);
+    }
+    for (const bad of [0, -5, 1.5, 1441, '30']) {
+      expect((await tool('add_task', { title: 'x', minutes: bad })).isError).toBe(true);
+    }
+    expect((await tool('add_task', { title: 'x', notes: 'n'.repeat(1001) })).isError).toBe(true);
+    expect((await tool('add_task', { title: 'x', notes: 5 })).isError).toBe(true);
+    const bad = await tool('set_daily_plan', { tasks: [{ title: 'ok', start: '99:99' }] });
+    expect(bad.isError).toBe(true);
+    expect(bad.text).toContain('HH:MM');
+  });
+
+  it('treats blank notes and start as absent', async () => {
+    const { data } = await tool('add_task', { title: 'x', notes: '   ', start: '' });
+    expect(data.added).toMatchObject({ notes: null, start: null });
+  });
+
+  it('exposes the new fields in tools/list', async () => {
+    const { body } = await rpc('tools/list');
+    const setPlan = body.result.tools.find((t: any) => t.name === 'set_daily_plan');
+    expect(Object.keys(setPlan.inputSchema.properties.tasks.items.properties)).toEqual([
+      'title', 'tag', 'start', 'minutes', 'notes',
+    ]);
+  });
+
+  it('serves and patches them over REST for the app', async () => {
+    const { data } = await tool('set_daily_plan', { tasks: [{ title: 'A', start: '15:30', minutes: 25, notes: 'go' }] });
+    const list = (await (await call('/api/tasks')).json()) as any;
+    expect(list.tasks[0]).toMatchObject({ start: '15:30', minutes: 25, notes: 'go' });
+    const patch = await call(`/api/tasks/${data.tasks[0].id}`, { method: 'PATCH', body: JSON.stringify({ start: '16:00' }) });
+    expect(((await patch.json()) as any).start).toBe('16:00');
+    const bad = await call(`/api/tasks/${data.tasks[0].id}`, { method: 'PATCH', body: JSON.stringify({ start: 'noon' }) });
+    expect(bad.status).toBe(400);
+  });
+});
+
 describe('rest api for the app', () => {
   it('lists tasks for a date and defaults to today', async () => {
     await tool('set_daily_plan', { tasks: [{ title: 'A', tag: 'sat' }] });
@@ -218,7 +311,17 @@ describe('rest api for the app', () => {
     const body = (await res.json()) as any;
     expect(body.date).toBe('2026-10-01');
     expect(body.tasks).toEqual([
-      { id: expect.any(String), date: '2026-10-01', title: 'A', tag: 'sat', done: false, position: 0 },
+      {
+        id: expect.any(String),
+        date: '2026-10-01',
+        title: 'A',
+        tag: 'sat',
+        start: null,
+        minutes: null,
+        notes: null,
+        done: false,
+        position: 0,
+      },
     ]);
     expect(((await (await call('/api/tasks')).json()) as any).tasks).toHaveLength(1);
   });
