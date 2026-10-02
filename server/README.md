@@ -67,6 +67,15 @@ npm run db:sync:remote      # 0004: site sync columns (run once; errors if alrea
 npm run deploy
 ```
 
+If `npm run db:...:remote` fails with `Authentication error [code: 10000]` on `/import`, that is a wrangler quirk with
+`--file` (the import endpoint). Run the SQL with `--command` instead, e.g. for 0004:
+
+```bash
+npx wrangler d1 execute cozy-planner --remote --command "ALTER TABLE tasks ADD COLUMN site_key TEXT; ALTER TABLE tasks ADD COLUMN done_at INTEGER;"
+```
+
+(or `npx wrangler logout` then `npx wrangler login`). A failed run changes nothing, so it is safe to retry.
+
 Always migrate before deploying; the new code reads columns and a table the old database doesn't have.
 A brand-new database only needs `db:init:remote`.
 
