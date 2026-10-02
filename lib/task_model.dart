@@ -34,6 +34,22 @@ class Task {
   }
 }
 
+/// A titled block of text Claude writes for the day. Front sections are printed
+/// on the briefing side of the receipt; the rest open from a button.
+class InfoSection {
+  final String title;
+  final String body;
+  final bool front;
+  const InfoSection({required this.title, required this.body, required this.front});
+}
+
+class DayPlan {
+  final List<Task> tasks;
+  final String? headline;
+  final List<InfoSection> sections;
+  const DayPlan({required this.tasks, this.headline, this.sections = const []});
+}
+
 /// Short text shown on the receipt. (`name` is the enum's built-in id, which
 /// is also what the server uses.)
 extension TaskTagLabel on TaskTag {

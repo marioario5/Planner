@@ -76,7 +76,13 @@ export async function handleRequest(
     if (path === '/api/tasks') {
       if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405);
       const date = resolveDate(url.searchParams.get('date'), timeZone, now);
-      return json({ date, tasks: (await store.list(date)).map(apiView) });
+      const [tasks, info] = await Promise.all([store.list(date), store.getDayInfo(date)]);
+      return json({
+        date,
+        headline: info.headline,
+        sections: info.sections,
+        tasks: tasks.map(apiView),
+      });
     }
 
     const id = decodeURIComponent(path.slice('/api/tasks/'.length));

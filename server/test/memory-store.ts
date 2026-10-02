@@ -1,5 +1,6 @@
 import {
   normalizeTitle,
+  type DayInfo,
   type NewTask,
   type Task,
   type TaskPatch,
@@ -10,6 +11,7 @@ import {
 export class MemoryTaskStore implements TaskStore {
   private tasks: Task[] = [];
   private seq = 0;
+  private info = new Map<string, DayInfo>();
 
   async list(date: string): Promise<Task[]> {
     return this.tasks
@@ -52,6 +54,15 @@ export class MemoryTaskStore implements TaskStore {
     const before = this.tasks.length;
     this.tasks = this.tasks.filter((t) => t.id !== id);
     return this.tasks.length < before;
+  }
+
+  async getDayInfo(date: string): Promise<DayInfo> {
+    return this.info.get(date) ?? { headline: null, sections: [] };
+  }
+
+  async setDayInfo(date: string, info: DayInfo): Promise<void> {
+    if (info.headline === null && info.sections.length === 0) this.info.delete(date);
+    else this.info.set(date, info);
   }
 
   private insert(date: string, task: NewTask, position: number, done: boolean): Task {

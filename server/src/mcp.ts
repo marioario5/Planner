@@ -6,6 +6,7 @@ import { resolveDate } from './dates';
 import {
   TAGS,
   ValidationError,
+  parseDayInfo,
   parseId,
   parseNewTask,
   parseNewTasks,
@@ -20,6 +21,7 @@ const SERVER_INFO = { name: 'cozy-planner', version: '1.0.0' };
 const INSTRUCTIONS =
   "Manage the daily task list shown in the user's cozy planner app. " +
   'To publish a day, call set_daily_plan once with the full ordered list. ' +
+  'set_day_info publishes the headline and info sections (warnings, pre-start checklist, next PCB work...) that go with the day. ' +
   'list_tasks shows what is on the list and what the user has already checked off.';
 
 const TAG_HELP =
@@ -80,6 +82,43 @@ const TOOLS = [
         },
       },
       required: ['tasks'],
+    },
+    annotations: { destructiveHint: true, idempotentHint: true },
+  },
+  {
+    name: 'set_day_info',
+    description:
+      "Replace the info that goes with a day's plan: a one-line headline plus titled sections of text. " +
+      'The app prints front=true sections on the first side of the receipt (the briefing he reads before starting: ' +
+      'warnings, pre-start checklist) and gives every other section its own button (e.g. next PCB work, at school, ' +
+      'deviations, if you drift). Section bodies are plain text; start lines with "- " for bullets. ' +
+      'Call with no arguments to clear the day. Separate from set_daily_plan, so call both.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        date: dateProp,
+        headline: {
+          type: 'string',
+          maxLength: 300,
+          description: 'One or two lines: the most important thing today and days to the next deadline.',
+        },
+        sections: {
+          type: 'array',
+          maxItems: 12,
+          items: {
+            type: 'object',
+            properties: {
+              title: { type: 'string', minLength: 1, maxLength: 60 },
+              body: { type: 'string', minLength: 1, maxLength: 4000 },
+              front: {
+                type: 'boolean',
+                description: 'true = printed on the briefing side. Default false = a button.',
+              },
+            },
+            required: ['title', 'body'],
+          },
+        },
+      },
     },
     annotations: { destructiveHint: true, idempotentHint: true },
   },
@@ -168,6 +207,16 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
       const date = resolveDate(args.date, timeZone, now);
       const tasks = await store.replaceDay(date, parseNewTasks(args.tasks));
       return summarize(date, tasks);
+    }
+    case 'set_day_info': {
+      const date = resolveDate(args.date, timeZone, now);
+      const info = parseDayInfo(args);
+      await store.setDayInfo(date, info);
+      return {
+        date,
+        headline: info.headline,
+        sections: info.sections.map((s) => ({ title: s.title, front: s.front })),
+      };
     }
     case 'list_tasks': {
       const date = resolveDate(args.date, timeZone, now);

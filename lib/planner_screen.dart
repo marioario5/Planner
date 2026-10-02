@@ -30,6 +30,40 @@ Color tagColor(TaskTag tag) {
   }
 }
 
+TextStyle _px(double size, Color color,
+        {double height = 1.8, double? letterSpacing}) =>
+    GoogleFonts.pressStart2p(
+        fontSize: size, color: color, height: height, letterSpacing: letterSpacing);
+
+/// Plain-text block from Claude. Lines starting with "- " or "* " get a bullet.
+class _InfoBody extends StatelessWidget {
+  final String text;
+  const _InfoBody(this.text);
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        for (final raw in text.split('\n'))
+          if (raw.trim().isNotEmpty)
+            Padding(
+              padding: const EdgeInsets.only(bottom: 4),
+              child: RegExp(r'^\s*[-*] ').hasMatch(raw)
+                  ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                      Text('• ', style: _px(5, cInkLight, height: 2)),
+                      Expanded(
+                        child: Text(raw.replaceFirst(RegExp(r'^\s*[-*] '), ''),
+                            style: _px(5, cInk, height: 2)),
+                      ),
+                    ])
+                  : Text(raw.trim(), style: _px(5, cInk, height: 2)),
+            ),
+      ],
+    );
+  }
+}
+
 class PlannerScreen extends StatefulWidget {
   const PlannerScreen({super.key});
   @override
@@ -48,6 +82,15 @@ class _PlannerScreenState extends State<PlannerScreen>
   String _vibe    = 'Matthew 11:29';
 
   List<Task> _tasks = [];
+  String? _headline;
+  List<InfoSection> _sections = [];
+  bool _showBriefing = false;
+
+  List<InfoSection> get _frontSections =>
+      _sections.where((s) => s.front).toList();
+  List<InfoSection> get _buttonSections =>
+      _sections.where((s) => !s.front).toList();
+  bool get _hasBriefing => _headline != null || _frontSections.isNotEmpty;
 
   @override
   void initState() {
@@ -222,7 +265,16 @@ class _PlannerScreenState extends State<PlannerScreen>
 
     if (result == 'disconnect') {
       await TasksService.clearConfig();
-      if (mounted) setState(() { _tasks = []; _printed = false; _error = null; });
+      if (mounted) {
+        setState(() {
+          _tasks = [];
+          _headline = null;
+          _sections = [];
+          _showBriefing = false;
+          _printed = false;
+          _error = null;
+        });
+      }
       return false;
     }
     if (result == 'save' && url.trim().isNotEmpty && token.trim().isNotEmpty) {
@@ -242,9 +294,9 @@ class _PlannerScreenState extends State<PlannerScreen>
     HapticFeedback.mediumImpact();
     setState(() { _loading = true; _error = null; });
 
-    List<Task> tasks;
+    DayPlan plan;
     try {
-      tasks = await TasksService.fetchTasks();
+      plan = await TasksService.fetchDay();
     } on TasksException catch (e) {
       // Don't print an empty receipt for a network failure — it would read
       // as "no tasks, enjoy the free time".
@@ -254,9 +306,13 @@ class _PlannerScreenState extends State<PlannerScreen>
 
     if (!mounted) return;
     setState(() {
-      _loading = false;
-      _tasks   = tasks;
-      _printed = true;
+      _loading   = false;
+      _tasks     = plan.tasks;
+      _headline  = plan.headline;
+      _sections  = plan.sections;
+      _printed   = true;
+      // Start on the briefing when Claude wrote one; otherwise straight to tasks.
+      _showBriefing = _hasBriefing;
     });
 
     _feedController.reset();
@@ -365,6 +421,7 @@ class _PlannerScreenState extends State<PlannerScreen>
                         fontSize: 5, color: cRose)),
                 const SizedBox(height: 8),
               ],
+              _sectionButtons(),
               _loading
                 ? Center(
                     child: Text('fetching tasks...',
@@ -402,9 +459,6 @@ class _PlannerScreenState extends State<PlannerScreen>
   // ── Paper receipt ───────────────────────────────────────────────────────
 
   Widget _buildPaper() {
-    final total = _tasks.length;
-    final done  = _doneCount;
-
     return SizedBox(
       width: 260,
       child: Column(children: [
@@ -452,6 +506,105 @@ class _PlannerScreenState extends State<PlannerScreen>
                 _dashedDivider(),
                 const SizedBox(height: 14),
 
+                AnimatedSwitcher(
+                  duration: const Duration(milliseconds: 450),
+                  transitionBuilder: _flipTransition,
+                  child: _showBriefing
+                      ? _buildBriefingSide(key: const ValueKey('briefing'))
+                      : _buildTaskSide(key: const ValueKey('tasks')),
+                ),
+              ]),
+            ),
+          ]),
+        ),
+        _buildTear(),
+        Center(
+          child: Container(
+            width: 234, height: 8,
+            decoration: BoxDecoration(
+              color: Colors.black.withValues(alpha: 0.12),
+              borderRadius: BorderRadius.circular(4),
+            ),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  // ── Receipt sides ───────────────────────────────────────────────────────
+
+  void _flip() {
+    HapticFeedback.selectionClick();
+    setState(() => _showBriefing = !_showBriefing);
+  }
+
+  /// Both the outgoing and incoming side run this: it turns the paper edge-on
+  /// as one side leaves and opens it back up as the other arrives.
+  Widget _flipTransition(Widget child, Animation<double> animation) {
+    return AnimatedBuilder(
+      animation: animation,
+      child: child,
+      builder: (context, child) => Transform(
+        alignment: Alignment.center,
+        transform: Matrix4.identity()
+          ..setEntry(3, 2, 0.001)
+          ..rotateY((1 - animation.value) * pi / 2),
+        child: child,
+      ),
+    );
+  }
+
+  /// Front of the receipt: the headline and the sections Claude marked `front`.
+  Widget _buildBriefingSide({Key? key}) {
+    final front = _frontSections;
+    return GestureDetector(
+      key: key,
+      behavior: HitTestBehavior.opaque,
+      onTap: _flip,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        if (_headline != null) ...[
+          Text(_headline!,
+              style: _px(6, cInk, height: 2)),
+          const SizedBox(height: 12),
+          _dashedDivider(),
+          const SizedBox(height: 12),
+        ],
+        for (final section in front) ...[
+          Text(section.title.toUpperCase(),
+              style: _px(6, cInkLight, letterSpacing: 0.5)),
+          const SizedBox(height: 6),
+          _InfoBody(section.body),
+          const SizedBox(height: 12),
+          _dashedDivider(),
+          const SizedBox(height: 12),
+        ],
+        Center(
+          child: Text('tap to flip  >  ${_tasks.length} tasks',
+              style: _px(5, cSage, height: 2)),
+        ),
+      ]),
+    );
+  }
+
+  /// Back of the receipt: the task list and progress.
+  Widget _buildTaskSide({Key? key}) {
+    final total = _tasks.length;
+    final done  = _doneCount;
+
+    return Column(key: key, children: [
+      if (_hasBriefing) ...[
+        Align(
+          alignment: Alignment.centerLeft,
+          child: GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: _flip,
+            child: Padding(
+              padding: const EdgeInsets.only(bottom: 10),
+              child: Text('<  briefing', style: _px(5, cSage, height: 2)),
+            ),
+          ),
+        ),
+      ],
                 // Tasks
                 if (_tasks.isEmpty)
                   Padding(
@@ -520,21 +673,58 @@ class _PlannerScreenState extends State<PlannerScreen>
                             fontSize: 5, color: cSage))),
                   ],
                 ],
-              ]),
-            ),
-          ]),
-        ),
-        _buildTear(),
-        Center(
-          child: Container(
-            width: 234, height: 8,
-            decoration: BoxDecoration(
-              color: Colors.black.withValues(alpha: 0.12),
-              borderRadius: BorderRadius.circular(4),
-            ),
+    ]);
+  }
+
+  /// Opens a non-briefing section (next PCB work, at school, ...).
+  Future<void> _showSection(InfoSection section) {
+    HapticFeedback.selectionClick();
+    return showDialog<void>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: cPaper,
+        shape: const RoundedRectangleBorder(
+            side: BorderSide(color: cInk, width: 2)),
+        title: Text(section.title, style: _px(8, cInk)),
+        content: SingleChildScrollView(child: _InfoBody(section.body)),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('CLOSE', style: _px(6, cInk)),
           ),
-        ),
-      ]),
+        ],
+      ),
+    );
+  }
+
+  Widget _sectionButtons() {
+    final buttons = _buttonSections;
+    if (!_printed || buttons.isEmpty) return const SizedBox.shrink();
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: Wrap(
+        alignment: WrapAlignment.center,
+        spacing: 6,
+        runSpacing: 6,
+        children: [
+          for (final section in buttons)
+            GestureDetector(
+              onTap: () => _showSection(section),
+              child: Container(
+                constraints: const BoxConstraints(maxWidth: 150),
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
+                decoration: BoxDecoration(
+                  color: cPaper,
+                  border: Border.all(color: cInk, width: 2),
+                ),
+                child: Text(section.title.toUpperCase(),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: _px(5, cInk, letterSpacing: 0.5, height: 1.2)),
+              ),
+            ),
+        ],
+      ),
     );
   }
 

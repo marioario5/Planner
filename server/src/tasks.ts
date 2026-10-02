@@ -37,6 +37,19 @@ export interface TaskPatch {
   done?: boolean;
 }
 
+/** A titled block of text Claude writes for the day (warnings, pre-start, next PCB work...). */
+export interface InfoSection {
+  title: string;
+  body: string;
+  /** true = printed on the front "briefing" side; false = opened from a button. */
+  front: boolean;
+}
+
+export interface DayInfo {
+  headline: string | null;
+  sections: InfoSection[];
+}
+
 export interface TaskStore {
   /** Timed tasks in clock order, then untimed tasks in the order they were given. */
   list(date: string): Promise<Task[]>;
@@ -45,6 +58,10 @@ export interface TaskStore {
   replaceDay(date: string, tasks: NewTask[]): Promise<Task[]>;
   update(id: string, patch: TaskPatch): Promise<Task | null>;
   remove(id: string): Promise<boolean>;
+  /** Empty (no headline, no sections) when nothing was written for the day. */
+  getDayInfo(date: string): Promise<DayInfo>;
+  /** Replaces the day's info. An empty DayInfo clears it. */
+  setDayInfo(date: string, info: DayInfo): Promise<void>;
 }
 
 export class ValidationError extends Error {}
@@ -52,6 +69,10 @@ export class ValidationError extends Error {}
 const MAX_TITLE = 200;
 const MAX_NOTES = 1000;
 const MAX_TASKS_PER_DAY = 100;
+const MAX_HEADLINE = 300;
+const MAX_SECTIONS = 12;
+const MAX_SECTION_TITLE = 60;
+const MAX_SECTION_BODY = 4000;
 
 export function parseTitle(value: unknown): string {
   if (typeof value !== 'string' || value.trim() === '') {
@@ -139,6 +160,47 @@ export function parsePatch(value: unknown): TaskPatch {
     throw new ValidationError('nothing to update: pass title, tag, start, minutes, notes, or done');
   }
   return patch;
+}
+
+function parseSection(value: unknown): InfoSection {
+  if (typeof value !== 'object' || value === null) {
+    throw new ValidationError('each section must be an object with a title and body');
+  }
+  const { title, body, front } = value as Record<string, unknown>;
+  if (typeof title !== 'string' || title.trim() === '') {
+    throw new ValidationError('section title must be a non-empty string');
+  }
+  if (title.trim().length > MAX_SECTION_TITLE) {
+    throw new ValidationError(`section title must be at most ${MAX_SECTION_TITLE} characters`);
+  }
+  if (typeof body !== 'string' || body.trim() === '') {
+    throw new ValidationError(`section "${title.trim()}" needs a non-empty body`);
+  }
+  if (body.trim().length > MAX_SECTION_BODY) {
+    throw new ValidationError(`section body must be at most ${MAX_SECTION_BODY} characters`);
+  }
+  if (front !== undefined && front !== null && typeof front !== 'boolean') {
+    throw new ValidationError('section front must be true or false');
+  }
+  return { title: title.trim(), body: body.trim(), front: front === true };
+}
+
+export function parseDayInfo(args: Record<string, unknown>): DayInfo {
+  const { headline, sections } = args;
+  let cleanHeadline: string | null = null;
+  if (headline !== undefined && headline !== null) {
+    if (typeof headline !== 'string') throw new ValidationError('headline must be a string');
+    cleanHeadline = headline.trim() === '' ? null : headline.trim();
+    if (cleanHeadline && cleanHeadline.length > MAX_HEADLINE) {
+      throw new ValidationError(`headline must be at most ${MAX_HEADLINE} characters`);
+    }
+  }
+  if (sections !== undefined && sections !== null && !Array.isArray(sections)) {
+    throw new ValidationError('sections must be an array');
+  }
+  const list = (sections as unknown[] | undefined | null) ?? [];
+  if (list.length > MAX_SECTIONS) throw new ValidationError(`at most ${MAX_SECTIONS} sections`);
+  return { headline: cleanHeadline, sections: list.map(parseSection) };
 }
 
 export function parseId(value: unknown): string {

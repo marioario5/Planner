@@ -1,5 +1,6 @@
 import {
   normalizeTitle,
+  type DayInfo,
   type NewTask,
   type Tag,
   type Task,
@@ -154,6 +155,37 @@ export class D1TaskStore implements TaskStore {
   async remove(id: string): Promise<boolean> {
     const result = await this.db.prepare('DELETE FROM tasks WHERE id = ?').bind(id).run();
     return result.meta.changes > 0;
+  }
+
+  async getDayInfo(date: string): Promise<DayInfo> {
+    const row = await this.db
+      .prepare('SELECT headline, sections FROM day_info WHERE date = ?')
+      .bind(date)
+      .first<{ headline: string | null; sections: string }>();
+    if (!row) return { headline: null, sections: [] };
+    let sections: DayInfo['sections'] = [];
+    try {
+      const parsed = JSON.parse(row.sections);
+      if (Array.isArray(parsed)) sections = parsed;
+    } catch {
+      // A corrupt row shouldn't take the whole day down; show the tasks without info.
+    }
+    return { headline: row.headline, sections };
+  }
+
+  async setDayInfo(date: string, info: DayInfo): Promise<void> {
+    if (info.headline === null && info.sections.length === 0) {
+      await this.db.prepare('DELETE FROM day_info WHERE date = ?').bind(date).run();
+      return;
+    }
+    await this.db
+      .prepare(
+        `INSERT INTO day_info (date, headline, sections, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(date) DO UPDATE SET
+           headline = excluded.headline, sections = excluded.sections, updated_at = excluded.updated_at`,
+      )
+      .bind(date, info.headline, JSON.stringify(info.sections), new Date().toISOString())
+      .run();
   }
 
   private async get(id: string): Promise<Task | null> {

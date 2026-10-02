@@ -81,9 +81,10 @@ class TasksService {
     return TasksException('server error (${res.statusCode})');
   }
 
-  /// Today's tasks (timed ones in clock order, untimed last), including ones already
-  /// checked off. Throws [TasksException] if the server can't be reached.
-  static Future<List<Task>> fetchTasks() async {
+  /// Today's plan: tasks (timed ones in clock order, untimed last, including
+  /// ones already checked off) plus the headline and info sections Claude wrote.
+  /// Throws [TasksException] if the server can't be reached.
+  static Future<DayPlan> fetchDay() async {
     if (!isConfigured) throw const TasksException('not connected');
 
     try {
@@ -93,7 +94,7 @@ class TasksService {
       if (res.statusCode != 200) throw _statusError(res);
 
       final body = jsonDecode(res.body) as Map<String, dynamic>;
-      return (body['tasks'] as List)
+      final tasks = (body['tasks'] as List)
           .cast<Map<String, dynamic>>()
           .map((t) => Task(
                 id: t['id'] as String,
@@ -105,6 +106,20 @@ class TasksService {
                 notes: t['notes'] as String?,
               ))
           .toList();
+      // `sections` is absent on a server that predates info sections.
+      final sections = ((body['sections'] as List?) ?? const [])
+          .cast<Map<String, dynamic>>()
+          .map((s) => InfoSection(
+                title: s['title'] as String,
+                body: s['body'] as String,
+                front: s['front'] == true,
+              ))
+          .toList();
+      return DayPlan(
+        tasks: tasks,
+        headline: body['headline'] as String?,
+        sections: sections,
+      );
     } on TasksException {
       rethrow;
     } on FormatException {

@@ -15,6 +15,7 @@ Claude routine ──MCP──▶  Worker + D1  ◀──REST──  Flutter app
 | Tool | What it does |
 | --- | --- |
 | `set_daily_plan` | Replace a day's list with `tasks: [{title, tag?, start?, minutes?, notes?}]`. Re-publishing keeps tasks checked off if the title matches. |
+| `set_day_info` | Replace the day's headline and info sections: `headline?`, `sections: [{title, body, front?}]`. Call with nothing to clear. |
 | `list_tasks` | The day's tasks with ids and `done` flags. |
 | `add_task` | Append one task. |
 | `update_task` | Change title / tag / time / notes, or set `done`. Pass `null` to clear `start`, `minutes` or `notes`. |
@@ -26,6 +27,18 @@ Each task can carry a time and detail, so titles stay short:
 - `start`: 24-hour `HH:MM` (e.g. `15:30`). Timed tasks are shown in clock order; untimed ones come last, in the order given.
 - `minutes`: planned length, shown next to the time (`3:30pm · 25m`).
 - `notes`: detail behind a "+ how to start" tap in the app (start move, if-then cue, method, break).
+
+### Info sections
+
+`set_day_info` lets Claude write everything that isn't a task. Each section is a title and a plain-text body
+(start a line with `- ` for a bullet):
+
+- `front: true` sections are printed on the **briefing** side of the receipt (headline, warnings, pre-start checklist).
+  Tapping the briefing flips the paper over to the task list.
+- every other section gets its own **button** in the app (next PCB work, at school, deviations, if you drift).
+
+If a day has no headline and no front sections, the app skips the briefing and prints the tasks directly.
+`set_daily_plan` and `set_day_info` are independent: re-publishing one never touches the other.
 
 `date` is optional everywhere and defaults to today in `PLANNER_TZ` (see `wrangler.toml`).
 
@@ -44,14 +57,16 @@ openssl rand -hex 24                    # your token — save it somewhere
 npx wrangler secret put API_TOKEN       # paste the token
 ```
 
-**Upgrading a database made before times/notes existed** (one time):
+**Upgrading an existing database.** Run only the steps you haven't run yet, then deploy:
 
 ```bash
-npm run db:migrate:remote
+npm run db:migrate:remote   # 0002: time, length and notes on tasks (run once; errors if already applied)
+npm run db:info:remote      # 0003: headline + info sections (safe to repeat)
 npm run deploy
 ```
 
-Run the migration before deploying. A brand-new database only needs `db:init:remote`.
+Always migrate before deploying; the new code reads columns and a table the old database doesn't have.
+A brand-new database only needs `db:init:remote`.
 
 Until `API_TOKEN` is set (16+ characters) every endpoint except `/` answers 500, so a half-deployed
 server is never open.

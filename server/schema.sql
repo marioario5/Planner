@@ -15,3 +15,10 @@ CREATE TABLE IF NOT EXISTS tasks (
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_date ON tasks (date, position);
+
+CREATE TABLE IF NOT EXISTS day_info (
+  date       TEXT PRIMARY KEY,           -- planner day, YYYY-MM-DD
+  headline   TEXT,
+  sections   TEXT NOT NULL DEFAULT '[]', -- JSON: [{title, body, front}]
+  updated_at TEXT NOT NULL
+);

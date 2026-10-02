@@ -10,6 +10,8 @@
     "db:init:remote": "wrangler d1 execute cozy-planner --remote --file=schema.sql",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "db:info:local": "wrangler d1 execute cozy-planner --local --file=migrations/0003_day_info.sql",
+    "db:info:remote": "wrangler d1 execute cozy-planner --remote --file=migrations/0003_day_info.sql",
     "db:migrate:local": "wrangler d1 execute cozy-planner --local --file=migrations/0002_time_and_notes.sql",
     "db:migrate:remote": "wrangler d1 execute cozy-planner --remote --file=migrations/0002_time_and_notes.sql"
   },

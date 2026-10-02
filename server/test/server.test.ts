@@ -98,10 +98,11 @@ describe('mcp protocol', () => {
     expect(await res.text()).toBe('');
   });
 
-  it('lists the five tools with schemas', async () => {
+  it('lists the six tools with schemas', async () => {
     const { body } = await rpc('tools/list');
     expect(body.result.tools.map((t: any) => t.name)).toEqual([
       'set_daily_plan',
+      'set_day_info',
       'list_tasks',
       'add_task',
       'update_task',
@@ -301,6 +302,80 @@ describe('times and notes', () => {
     expect(((await patch.json()) as any).start).toBe('16:00');
     const bad = await call(`/api/tasks/${data.tasks[0].id}`, { method: 'PATCH', body: JSON.stringify({ start: 'noon' }) });
     expect(bad.status).toBe(400);
+  });
+});
+
+describe('day info (headline + sections)', () => {
+  const sections = [
+    { title: 'Warnings', body: '- SAT date mismatch\n- Dr Dish still blocked', front: true },
+    { title: 'Pre-start', body: '- phone away\n- water', front: true },
+    { title: 'Next PCB work', body: 'Sun: Dr Dish bench session' },
+  ];
+
+  it('publishes info and the app sees it next to the tasks', async () => {
+    await tool('set_daily_plan', { tasks: [{ title: 'Calc 3', start: '15:30' }] });
+    const set = await tool('set_day_info', { headline: 'Finish PLTW, then SAT practice', sections });
+    expect(set.data.date).toBe('2026-10-01');
+    expect(set.data.sections).toEqual([
+      { title: 'Warnings', front: true },
+      { title: 'Pre-start', front: true },
+      { title: 'Next PCB work', front: false },
+    ]);
+
+    const rest = (await (await call('/api/tasks')).json()) as any;
+    expect(rest.headline).toBe('Finish PLTW, then SAT practice');
+    expect(rest.sections).toHaveLength(3);
+    expect(rest.sections[0]).toEqual({ title: 'Warnings', body: '- SAT date mismatch\n- Dr Dish still blocked', front: true });
+    expect(rest.sections[2].front).toBe(false);
+    expect(rest.tasks).toHaveLength(1);
+  });
+
+  it('replaces the previous info and keeps days separate', async () => {
+    await tool('set_day_info', { headline: 'old', sections });
+    await tool('set_day_info', { date: '2026-10-05', headline: 'other day' });
+    await tool('set_day_info', { headline: 'new' });
+    const today = (await (await call('/api/tasks')).json()) as any;
+    expect(today.headline).toBe('new');
+    expect(today.sections).toEqual([]);
+    const other = (await (await call('/api/tasks?date=2026-10-05')).json()) as any;
+    expect(other.headline).toBe('other day');
+  });
+
+  it('clears the day when called with nothing', async () => {
+    await tool('set_day_info', { headline: 'x', sections });
+    await tool('set_day_info', {});
+    const rest = (await (await call('/api/tasks')).json()) as any;
+    expect(rest).toMatchObject({ headline: null, sections: [] });
+  });
+
+  it('is independent of set_daily_plan', async () => {
+    await tool('set_day_info', { headline: 'keep me', sections });
+    await tool('set_daily_plan', { tasks: [{ title: 'A' }] });
+    await tool('set_daily_plan', { tasks: [] });
+    expect(((await (await call('/api/tasks')).json()) as any).headline).toBe('keep me');
+  });
+
+  it('returns null headline and no sections when nothing was written', async () => {
+    const rest = (await (await call('/api/tasks')).json()) as any;
+    expect(rest).toMatchObject({ headline: null, sections: [] });
+  });
+
+  it('rejects bad input as tool errors and leaves the old info alone', async () => {
+    await tool('set_day_info', { headline: 'keep', sections });
+    const bad: unknown[] = [
+      { headline: 5 },
+      { headline: 'h'.repeat(301) },
+      { sections: 'nope' },
+      { sections: [{ title: '', body: 'x' }] },
+      { sections: [{ title: 'T', body: '   ' }] },
+      { sections: [{ title: 'T', body: 'x', front: 'yes' }] },
+      { sections: [{ title: 'T'.repeat(61), body: 'x' }] },
+      { sections: [{ title: 'T', body: 'x'.repeat(4001) }] },
+      { sections: Array.from({ length: 13 }, () => ({ title: 'T', body: 'x' })) },
+      { sections: [null] },
+    ];
+    for (const args of bad) expect((await tool('set_day_info', args)).isError).toBe(true);
+    expect(((await (await call('/api/tasks')).json()) as any).headline).toBe('keep');
   });
 });
 
