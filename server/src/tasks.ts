@@ -13,7 +13,11 @@ export interface Task {
   start: string | null;
   minutes: number | null;
   notes: string | null;
+  /** Id of the matching task on his progress site (e.g. "calc3-t12"), or null. */
+  siteKey: string | null;
   done: boolean;
+  /** Epoch ms of the last time `done` was toggled (either way); null if never. */
+  doneAt: number | null;
   position: number;
   createdAt: string;
   completedAt: string | null;
@@ -25,6 +29,7 @@ export interface NewTask {
   start: string | null;
   minutes: number | null;
   notes: string | null;
+  siteKey: string | null;
 }
 
 /** For start/minutes/notes: undefined = leave alone, null = clear. */
@@ -34,6 +39,7 @@ export interface TaskPatch {
   start?: string | null;
   minutes?: number | null;
   notes?: string | null;
+  siteKey?: string | null;
   done?: boolean;
 }
 
@@ -60,6 +66,8 @@ export interface TaskStore {
   replaceDay(date: string, tasks: NewTask[]): Promise<Task[]>;
   update(id: string, patch: TaskPatch): Promise<Task | null>;
   remove(id: string): Promise<boolean>;
+  /** Applies a check-off that came from the progress site, keeping the site's timestamp. */
+  setDoneFromSite(id: string, done: boolean, atMs: number): Promise<void>;
   /** Empty (no headline, no sections) when nothing was written for the day. */
   getDayInfo(date: string): Promise<DayInfo>;
   /** Replaces the day's info. An empty DayInfo clears it. */
@@ -121,17 +129,26 @@ export function parseNotes(value: unknown): string | null {
   return notes === '' ? null : notes;
 }
 
+export function parseSiteKey(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(value)) {
+    throw new ValidationError('siteKey must be a site task id like calc3-t12');
+  }
+  return value;
+}
+
 export function parseNewTask(value: unknown): NewTask {
   if (typeof value !== 'object' || value === null) {
     throw new ValidationError('each task must be an object with a title');
   }
-  const { title, tag, start, minutes, notes } = value as Record<string, unknown>;
+  const { title, tag, start, minutes, notes, siteKey } = value as Record<string, unknown>;
   return {
     title: parseTitle(title),
     tag: parseTag(tag),
     start: parseStart(start),
     minutes: parseMinutes(minutes),
     notes: parseNotes(notes),
+    siteKey: parseSiteKey(siteKey),
   };
 }
 
@@ -147,8 +164,9 @@ export function parsePatch(value: unknown): TaskPatch {
   if (typeof value !== 'object' || value === null) {
     throw new ValidationError('patch must be an object');
   }
-  const { title, tag, done, start, minutes, notes } = value as Record<string, unknown>;
+  const { title, tag, done, start, minutes, notes, siteKey } = value as Record<string, unknown>;
   const patch: TaskPatch = {};
+  if (siteKey !== undefined) patch.siteKey = parseSiteKey(siteKey);
   if (title !== undefined) patch.title = parseTitle(title);
   if (tag !== undefined) patch.tag = parseTag(tag);
   if (start !== undefined) patch.start = parseStart(start);
@@ -159,7 +177,7 @@ export function parsePatch(value: unknown): TaskPatch {
     patch.done = done;
   }
   if (Object.keys(patch).length === 0) {
-    throw new ValidationError('nothing to update: pass title, tag, start, minutes, notes, or done');
+    throw new ValidationError('nothing to update: pass title, tag, start, minutes, notes, siteKey, or done');
   }
   return patch;
 }

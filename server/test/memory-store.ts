@@ -12,6 +12,8 @@ export class MemoryTaskStore implements TaskStore {
   private tasks: Task[] = [];
   private seq = 0;
   private info = new Map<string, DayInfo>();
+  /** Tests can pin the clock that stamps check-offs. */
+  clock: () => number = () => Date.now();
 
   async list(date: string): Promise<Task[]> {
     return this.tasks
@@ -33,13 +35,16 @@ export class MemoryTaskStore implements TaskStore {
 
   async add(date: string, task: NewTask): Promise<Task> {
     const position = this.tasks.filter((t) => t.date === date).length;
-    return this.insert(date, task, position, false);
+    return this.insert(date, task, position, false, null);
   }
 
   async replaceDay(date: string, tasks: NewTask[]): Promise<Task[]> {
-    const done = new Set((await this.list(date)).filter((t) => t.done).map((t) => normalizeTitle(t.title)));
+    const previous = new Map((await this.list(date)).map((t) => [normalizeTitle(t.title), t]));
     this.tasks = this.tasks.filter((t) => t.date !== date);
-    tasks.forEach((t, i) => this.insert(date, t, i, done.has(normalizeTitle(t.title))));
+    tasks.forEach((t, i) => {
+      const old = previous.get(normalizeTitle(t.title));
+      this.insert(date, t, i, old?.done === true, old?.doneAt ?? null);
+    });
     return this.list(date);
   }
 
@@ -51,9 +56,11 @@ export class MemoryTaskStore implements TaskStore {
     if (patch.start !== undefined) task.start = patch.start;
     if (patch.minutes !== undefined) task.minutes = patch.minutes;
     if (patch.notes !== undefined) task.notes = patch.notes;
+    if (patch.siteKey !== undefined) task.siteKey = patch.siteKey;
     if (patch.done !== undefined) {
       task.done = patch.done;
-      task.completedAt = patch.done ? new Date().toISOString() : null;
+      task.doneAt = this.clock();
+      task.completedAt = patch.done ? new Date(task.doneAt).toISOString() : null;
     }
     return task;
   }
@@ -62,6 +69,14 @@ export class MemoryTaskStore implements TaskStore {
     const before = this.tasks.length;
     this.tasks = this.tasks.filter((t) => t.id !== id);
     return this.tasks.length < before;
+  }
+
+  async setDoneFromSite(id: string, done: boolean, atMs: number): Promise<void> {
+    const task = this.tasks.find((t) => t.id === id);
+    if (!task) return;
+    task.done = done;
+    task.doneAt = atMs;
+    task.completedAt = done ? new Date(atMs).toISOString() : null;
   }
 
   async getDayInfo(date: string): Promise<DayInfo> {
@@ -73,7 +88,7 @@ export class MemoryTaskStore implements TaskStore {
     else this.info.set(date, info);
   }
 
-  private insert(date: string, task: NewTask, position: number, done: boolean): Task {
+  private insert(date: string, task: NewTask, position: number, done: boolean, doneAt: number | null): Task {
     const row: Task = {
       id: `t${++this.seq}`,
       date,
@@ -82,10 +97,12 @@ export class MemoryTaskStore implements TaskStore {
       start: task.start,
       minutes: task.minutes,
       notes: task.notes,
+      siteKey: task.siteKey,
       done,
+      doneAt,
       position,
       createdAt: new Date().toISOString(),
-      completedAt: done ? new Date().toISOString() : null,
+      completedAt: done ? new Date(doneAt ?? this.clock()).toISOString() : null,
     };
     this.tasks.push(row);
     return row;

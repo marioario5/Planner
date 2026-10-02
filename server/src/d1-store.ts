@@ -16,7 +16,9 @@ interface Row {
   start_time: string | null;
   minutes: number | null;
   notes: string | null;
+  site_key: string | null;
   done: number;
+  done_at: number | null;
   position: number;
   created_at: string;
   completed_at: string | null;
@@ -31,7 +33,9 @@ function toTask(row: Row): Task {
     start: row.start_time,
     minutes: row.minutes,
     notes: row.notes,
+    siteKey: row.site_key,
     done: row.done === 1,
+    doneAt: row.done_at,
     position: row.position,
     createdAt: row.created_at,
     completedAt: row.completed_at,
@@ -39,6 +43,10 @@ function toTask(row: Row): Task {
 }
 
 const newId = () => crypto.randomUUID().slice(0, 8);
+
+const INSERT = `INSERT INTO tasks
+  (id, date, title, tag, start_time, minutes, notes, site_key, done, done_at, position, created_at, completed_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 export class D1TaskStore implements TaskStore {
   constructor(private readonly db: D1Database) {}
@@ -68,12 +76,14 @@ export class D1TaskStore implements TaskStore {
 
   async add(date: string, task: NewTask): Promise<Task> {
     const id = newId();
+    const position = (
+      await this.db
+        .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS next FROM tasks WHERE date = ?')
+        .bind(date)
+        .first<{ next: number }>()
+    )?.next ?? 0;
     await this.db
-      .prepare(
-        `INSERT INTO tasks (id, date, title, tag, start_time, minutes, notes, done, position, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 0,
-                 (SELECT COALESCE(MAX(position), -1) + 1 FROM tasks WHERE date = ?), ?)`,
-      )
+      .prepare(INSERT)
       .bind(
         id,
         date,
@@ -82,31 +92,31 @@ export class D1TaskStore implements TaskStore {
         task.start,
         task.minutes,
         task.notes,
-        date,
+        task.siteKey,
+        0,
+        null,
+        position,
         new Date().toISOString(),
+        null,
       )
       .run();
     return (await this.get(id))!;
   }
 
   async replaceDay(date: string, tasks: NewTask[]): Promise<Task[]> {
-    const existing = await this.list(date);
-    const doneAt = new Map<string, string | null>();
-    for (const t of existing) {
-      if (t.done) doneAt.set(normalizeTitle(t.title), t.completedAt);
-    }
+    // Carry check-offs across a re-publish by title, plus when they were toggled,
+    // so the site sync can still tell which side changed last.
+    const previous = new Map<string, Task>();
+    for (const t of await this.list(date)) previous.set(normalizeTitle(t.title), t);
 
     const now = new Date().toISOString();
     const statements = [this.db.prepare('DELETE FROM tasks WHERE date = ?').bind(date)];
     tasks.forEach((task, position) => {
-      const key = normalizeTitle(task.title);
-      const wasDone = doneAt.has(key);
+      const old = previous.get(normalizeTitle(task.title));
+      const done = old?.done === true;
       statements.push(
         this.db
-          .prepare(
-            `INSERT INTO tasks (id, date, title, tag, start_time, minutes, notes, done, position, created_at, completed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
+          .prepare(INSERT)
           .bind(
             newId(),
             date,
@@ -115,10 +125,12 @@ export class D1TaskStore implements TaskStore {
             task.start,
             task.minutes,
             task.notes,
-            wasDone ? 1 : 0,
+            task.siteKey,
+            done ? 1 : 0,
+            old?.doneAt ?? null,
             position,
             now,
-            wasDone ? (doneAt.get(key) ?? now) : null,
+            done ? (old?.completedAt ?? now) : null,
           ),
       );
     });
@@ -149,9 +161,13 @@ export class D1TaskStore implements TaskStore {
       sets.push('notes = ?');
       values.push(patch.notes);
     }
+    if (patch.siteKey !== undefined) {
+      sets.push('site_key = ?');
+      values.push(patch.siteKey);
+    }
     if (patch.done !== undefined) {
-      sets.push('done = ?', 'completed_at = ?');
-      values.push(patch.done ? 1 : 0, patch.done ? new Date().toISOString() : null);
+      sets.push('done = ?', 'completed_at = ?', 'done_at = ?');
+      values.push(patch.done ? 1 : 0, patch.done ? new Date().toISOString() : null, Date.now());
     }
     if (sets.length === 0) return this.get(id);
 
@@ -166,6 +182,13 @@ export class D1TaskStore implements TaskStore {
   async remove(id: string): Promise<boolean> {
     const result = await this.db.prepare('DELETE FROM tasks WHERE id = ?').bind(id).run();
     return result.meta.changes > 0;
+  }
+
+  async setDoneFromSite(id: string, done: boolean, atMs: number): Promise<void> {
+    await this.db
+      .prepare('UPDATE tasks SET done = ?, done_at = ?, completed_at = ? WHERE id = ?')
+      .bind(done ? 1 : 0, atMs, done ? new Date(atMs).toISOString() : null, id)
+      .run();
   }
 
   async getDayInfo(date: string): Promise<DayInfo> {

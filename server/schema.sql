@@ -8,7 +8,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   start_time   TEXT,                          -- 24-hour HH:MM, NULL = untimed
   minutes      INTEGER,
   notes        TEXT,
+  site_key     TEXT,                          -- progress-site task id this mirrors, e.g. calc3-t12
   done         INTEGER NOT NULL DEFAULT 0,
+  done_at      INTEGER,                       -- epoch ms of the last done toggle (either way)
   position     INTEGER NOT NULL DEFAULT 0,
   created_at   TEXT NOT NULL,
   completed_at TEXT

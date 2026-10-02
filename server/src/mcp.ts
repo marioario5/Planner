@@ -3,6 +3,7 @@
 // no session to track and each POST can be answered on its own.
 
 import { localTime, resolveDate, shiftDate } from './dates';
+import { DEFAULT_PREFIXES, isSyncable, reconcile, type SyncConfig } from './sync';
 import {
   TAGS,
   ValidationError,
@@ -43,7 +44,7 @@ const titleProp = {
 };
 const startProp = {
   type: 'string',
-  pattern: '^([01]\d|2[0-3]):[0-5]\d$',
+  pattern: '^([01]\\d|2[0-3]):[0-5]\\d$',
   description: '24-hour start time, e.g. "15:30". Leave out for untimed tasks (shown last).',
 };
 const minutesProp = { type: 'integer', minimum: 1, maximum: 1440, description: 'Planned length in minutes.' };
@@ -52,6 +53,14 @@ const notesProp = {
   maxLength: 1000,
   description:
     'Detail shown when he taps the task: start move, if-then cue, method, stop time and break.',
+};
+const siteKeyProp = {
+  type: 'string',
+  pattern: '^[A-Za-z0-9_-]{1,80}$',
+  description:
+    'Id of the matching task on his progress site, e.g. "calc3-t12" (Calc 3 lessons and rest-day rows). ' +
+    'Checking the task in the app ticks it on the site and the other way round. ' +
+    'Only ids starting with calc3- are mirrored; leave out for everything else.',
 };
 
 const TOOLS = [
@@ -76,6 +85,7 @@ const TOOLS = [
               start: startProp,
               minutes: minutesProp,
               notes: notesProp,
+              siteKey: siteKeyProp,
             },
             required: ['title'],
           },
@@ -164,6 +174,7 @@ const TOOLS = [
         start: startProp,
         minutes: minutesProp,
         notes: notesProp,
+        siteKey: siteKeyProp,
       },
       required: ['title'],
     },
@@ -183,6 +194,7 @@ const TOOLS = [
         start: { ...startProp, type: ['string', 'null'] },
         minutes: { ...minutesProp, type: ['integer', 'null'] },
         notes: { ...notesProp, type: ['string', 'null'] },
+        siteKey: { ...siteKeyProp, type: ['string', 'null'] },
         done: { type: 'boolean' },
       },
       required: ['id'],
@@ -201,6 +213,8 @@ export interface McpContext {
   store: TaskStore;
   timeZone: string;
   now?: Date;
+  /** Mirrors check-offs with the progress site; absent = feature off. */
+  sync?: SyncConfig;
 }
 
 type Json = Record<string, unknown>;
@@ -212,6 +226,7 @@ const view = (t: Task, timeZone: string) => ({
   start: t.start,
   minutes: t.minutes,
   notes: t.notes,
+  siteKey: t.siteKey,
   done: t.done,
   // Local HH:MM he checked it off; null while it's not done.
   completed: t.done && t.completedAt ? localTime(t.completedAt, timeZone) : null,
@@ -234,14 +249,28 @@ function parseDays(value: unknown): number {
   return value;
 }
 
+/** A siteKey must be one we actually mirror, so a typo fails loudly instead of silently never syncing. */
+function checkSiteKeys(keys: (string | null | undefined)[], ctx: McpContext): void {
+  const prefixes = ctx.sync?.prefixes ?? DEFAULT_PREFIXES;
+  for (const key of keys) {
+    if (key && !isSyncable(key, prefixes)) {
+      throw new ValidationError(
+        `siteKey "${key}" is not mirrored: only ids starting with ${prefixes.join(', ')} sync with the site`,
+      );
+    }
+  }
+}
+
 async function history(args: Json, ctx: McpContext): Promise<Json> {
   const { store, timeZone, now } = ctx;
   const through = resolveDate(args.through, timeZone, now);
   const days = parseDays(args.days);
   const from = shiftDate(through, -(days - 1));
 
+  const all = await store.listRange(from, through);
+  await reconcile(store, all, ctx.sync); // pick up anything he ticked on the site
   const byDate = new Map<string, Task[]>();
-  for (const t of await store.listRange(from, through)) {
+  for (const t of all) {
     byDate.set(t.date, [...(byDate.get(t.date) ?? []), t]);
   }
 
@@ -273,7 +302,10 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
   switch (name) {
     case 'set_daily_plan': {
       const date = resolveDate(args.date, timeZone, now);
-      const tasks = await store.replaceDay(date, parseNewTasks(args.tasks));
+      const parsed = parseNewTasks(args.tasks);
+      checkSiteKeys(parsed.map((t) => t.siteKey), ctx);
+      const tasks = await store.replaceDay(date, parsed);
+      await reconcile(store, tasks, ctx.sync); // a lesson already ticked on the site arrives ticked
       return summarize(date, tasks, timeZone);
     }
     case 'set_day_info': {
@@ -288,19 +320,28 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
     }
     case 'list_tasks': {
       const date = resolveDate(args.date, timeZone, now);
-      return summarize(date, await store.list(date), timeZone);
+      const tasks = await store.list(date);
+      await reconcile(store, tasks, ctx.sync);
+      return summarize(date, tasks, timeZone);
     }
     case 'get_history':
       return history(args, ctx);
     case 'add_task': {
       const date = resolveDate(args.date, timeZone, now);
-      return { added: view(await store.add(date, parseNewTask(args)), timeZone), date };
+      const parsed = parseNewTask(args);
+      checkSiteKeys([parsed.siteKey], ctx);
+      const added = await store.add(date, parsed);
+      await reconcile(store, [added], ctx.sync);
+      return { added: view(added, timeZone), date };
     }
     case 'update_task': {
       const id = parseId(args.id);
       const { id: _id, ...rest } = args;
-      const task = await store.update(id, parsePatch(rest));
+      const patch = parsePatch(rest);
+      checkSiteKeys([patch.siteKey], ctx);
+      const task = await store.update(id, patch);
       if (!task) throw new ValidationError(`no task with id ${id}`);
+      if (patch.done !== undefined || patch.siteKey) await reconcile(store, [task], ctx.sync);
       return { updated: view(task, timeZone) };
     }
     case 'delete_task': {

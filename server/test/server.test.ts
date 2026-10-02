@@ -291,7 +291,7 @@ describe('times and notes', () => {
     const { body } = await rpc('tools/list');
     const setPlan = body.result.tools.find((t: any) => t.name === 'set_daily_plan');
     expect(Object.keys(setPlan.inputSchema.properties.tasks.items.properties)).toEqual([
-      'title', 'tag', 'start', 'minutes', 'notes',
+      'title', 'tag', 'start', 'minutes', 'notes', 'siteKey',
     ]);
   });
 

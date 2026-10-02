@@ -1,7 +1,9 @@
 import { bearerMatches, tokenConfigured, tokenMatches } from './auth';
 import { D1TaskStore } from './d1-store';
 import { resolveDate } from './dates';
+import { FirebaseSite } from './firebase';
 import { handleMcpPost } from './mcp';
+import { parsePrefixes, reconcile, type SyncConfig } from './sync';
 import { ValidationError, parsePatch, type Task, type TaskStore } from './tasks';
 
 export interface Env {
@@ -9,6 +11,10 @@ export interface Env {
   /** Shared secret. Set with `wrangler secret put API_TOKEN`. */
   API_TOKEN: string;
   PLANNER_TZ?: string;
+  /** The progress site's Firebase state URL. Set with `wrangler secret put FIREBASE_STATE_URL`; unset = no site sync. */
+  FIREBASE_STATE_URL?: string;
+  /** Comma-separated site task id prefixes to mirror. Default `calc3-`. */
+  SYNC_PREFIXES?: string;
 }
 
 const DEFAULT_TZ = 'America/Los_Angeles';
@@ -42,6 +48,7 @@ export async function handleRequest(
   env: Pick<Env, 'API_TOKEN' | 'PLANNER_TZ'>,
   store: TaskStore,
   now?: Date,
+  sync?: SyncConfig,
 ): Promise<Response> {
   const url = new URL(request.url);
   const path = url.pathname.replace(/\/+$/, '') || '/';
@@ -68,7 +75,7 @@ export async function handleRequest(
         // No server-initiated stream and no sessions to terminate.
         return new Response(null, { status: 405, headers: { Allow: 'POST' } });
       }
-      return await handleMcpPost(request, { store, timeZone, now });
+      return await handleMcpPost(request, { store, timeZone, now, sync });
     }
 
     if (!(await bearerMatches(request, env.API_TOKEN))) return unauthorized();
@@ -77,6 +84,7 @@ export async function handleRequest(
       if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405);
       const date = resolveDate(url.searchParams.get('date'), timeZone, now);
       const [tasks, info] = await Promise.all([store.list(date), store.getDayInfo(date)]);
+      await reconcile(store, tasks, sync); // pull in anything he ticked on the site
       return json({
         date,
         headline: info.headline,
@@ -90,8 +98,12 @@ export async function handleRequest(
       const body = await request.json().catch(() => {
         throw new ValidationError('body must be JSON');
       });
-      const task = await store.update(id, parsePatch(body));
-      return task ? json(apiView(task)) : json({ error: 'no such task' }, 404);
+      const patch = parsePatch(body);
+      if (patch.siteKey !== undefined) throw new ValidationError('siteKey can only be set through MCP');
+      const task = await store.update(id, patch);
+      if (!task) return json({ error: 'no such task' }, 404);
+      if (patch.done !== undefined) await reconcile(store, [task], sync); // mirror the tick to the site
+      return json(apiView(task));
     }
     if (request.method === 'DELETE') {
       return (await store.remove(id)) ? json({ deleted: id }) : json({ error: 'no such task' }, 404);
@@ -104,6 +116,12 @@ export async function handleRequest(
   }
 }
 
+function syncFromEnv(env: Env): SyncConfig | undefined {
+  if (!env.FIREBASE_STATE_URL) return undefined;
+  return { site: new FirebaseSite(env.FIREBASE_STATE_URL), prefixes: parsePrefixes(env.SYNC_PREFIXES) };
+}
+
 export default {
-  fetch: (request: Request, env: Env) => handleRequest(request, env, new D1TaskStore(env.DB)),
+  fetch: (request: Request, env: Env) =>
+    handleRequest(request, env, new D1TaskStore(env.DB), undefined, syncFromEnv(env)),
 };
