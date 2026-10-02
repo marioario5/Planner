@@ -22,11 +22,11 @@ const Color cBgDark      = Color(0xFFA8966E);
 
 Color tagColor(TaskTag tag) {
   switch (tag) {
-    case TaskTag.calculus:  return cRose;
-    case TaskTag.projects:   return cTeal;
-    case TaskTag.other: return cLavender;
-    case TaskTag.trombone:  return cSage;
-    case TaskTag.korean:   return cAmber;
+    case TaskTag.school:      return cAmber;
+    case TaskTag.calculus3:   return cRose;
+    case TaskTag.sat:         return cLavender;
+    case TaskTag.pcb:         return cTeal;
+    case TaskTag.photography: return cSage;
   }
 }
 
@@ -63,14 +63,14 @@ class _PlannerScreenState extends State<PlannerScreen>
       duration: const Duration(milliseconds: 4000),
     );
 
-    // Try silent sign-in on launch
-    _trySilentSignIn();
+    // Pick up the saved server address and token on launch
+    _loadConnection();
     _loadVibe();
   }
 
-  Future<void> _trySilentSignIn() async {
-    final ok = await TasksService.signIn();
-    if (ok && mounted) setState(() {});
+  Future<void> _loadConnection() async {
+    await TasksService.load();
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadVibe() async {
@@ -130,11 +130,11 @@ class _PlannerScreenState extends State<PlannerScreen>
 
     final ok = await TasksService.setTaskCompleted(task, newDone);
     if (!ok && mounted) {
-      // Couldn't reach Google Tasks — revert the checkbox so the UI
+      // Couldn't reach the server — revert the checkbox so the UI
       // doesn't claim it's synced when it isn't.
       setState(() {
         task.done = !newDone;
-        _error = "Couldn't sync with Google Tasks";
+        _error = "Couldn't sync that change";
       });
     }
   }
@@ -144,26 +144,113 @@ class _PlannerScreenState extends State<PlannerScreen>
     setState(() => _tasks.remove(task));
   }
 
-  Future<void> _handleSignOut() async {
-    await TasksService.signOut();
-    if (mounted) setState(() { _tasks = []; _printed = false; });
+  /// Asks for the planner server address and token. Returns true if saved.
+  Future<bool> _showConnectDialog() async {
+    final urlCtrl   = TextEditingController(text: TasksService.baseUrl ?? '');
+    final tokenCtrl = TextEditingController(text: TasksService.token ?? '');
+
+    TextStyle label(double size, Color color) =>
+        GoogleFonts.pressStart2p(fontSize: size, color: color, height: 1.8);
+
+    InputDecoration field(String hint) => InputDecoration(
+      hintText: hint,
+      hintStyle: label(6, cInkLight.withValues(alpha: 0.4)),
+      isDense: true,
+      enabledBorder: const OutlineInputBorder(
+          borderRadius: BorderRadius.zero,
+          borderSide: BorderSide(color: cInkLight, width: 2)),
+      focusedBorder: const OutlineInputBorder(
+          borderRadius: BorderRadius.zero,
+          borderSide: BorderSide(color: cInk, width: 2)),
+    );
+
+    final result = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: cPaper,
+        shape: const RoundedRectangleBorder(
+            side: BorderSide(color: cInk, width: 2)),
+        title: Text('connect planner', style: label(8, cInk)),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('server address', style: label(6, cInkLight)),
+            const SizedBox(height: 6),
+            TextField(
+              controller: urlCtrl,
+              keyboardType: TextInputType.url,
+              autocorrect: false,
+              style: label(6, cInk),
+              decoration: field('your-worker.workers.dev'),
+            ),
+            const SizedBox(height: 14),
+            Text('token', style: label(6, cInkLight)),
+            const SizedBox(height: 6),
+            TextField(
+              controller: tokenCtrl,
+              obscureText: true,
+              autocorrect: false,
+              enableSuggestions: false,
+              style: label(6, cInk),
+              decoration: field('API_TOKEN'),
+            ),
+          ],
+        ),
+        actions: [
+          if (TasksService.isConfigured)
+            TextButton(
+              onPressed: () => Navigator.pop(ctx, 'disconnect'),
+              child: Text('DISCONNECT', style: label(6, cRose)),
+            ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('CANCEL', style: label(6, cInkLight)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, 'save'),
+            child: Text('SAVE', style: label(6, cInk)),
+          ),
+        ],
+      ),
+    );
+
+    final url   = urlCtrl.text;
+    final token = tokenCtrl.text;
+    urlCtrl.dispose();
+    tokenCtrl.dispose();
+
+    if (result == 'disconnect') {
+      await TasksService.clearConfig();
+      if (mounted) setState(() { _tasks = []; _printed = false; _error = null; });
+      return false;
+    }
+    if (result == 'save' && url.trim().isNotEmpty && token.trim().isNotEmpty) {
+      await TasksService.saveConfig(url, token);
+      if (mounted) setState(() => _error = null);
+      return true;
+    }
+    return false;
   }
 
   Future<void> _printPaper() async {
-    if (!TasksService.isSignedIn) {
-      setState(() => _error = null);
-      final ok = await TasksService.signIn();
-      if (!ok) {
-        if (mounted) setState(() => _error = 'Sign in failed. Try again.');
-        return;
-      }
-      if (mounted) setState(() {});
+    if (!TasksService.isConfigured) {
+      final saved = await _showConnectDialog();
+      if (!saved || !mounted) return;
     }
 
     HapticFeedback.mediumImpact();
     setState(() { _loading = true; _error = null; });
 
-    final tasks = await TasksService.fetchTasks();
+    List<Task> tasks;
+    try {
+      tasks = await TasksService.fetchTasks();
+    } on TasksException catch (e) {
+      // Don't print an empty receipt for a network failure — it would read
+      // as "no tasks, enjoy the free time".
+      if (mounted) setState(() { _loading = false; _error = e.message; });
+      return;
+    }
 
     if (!mounted) return;
     setState(() {
@@ -201,9 +288,9 @@ class _PlannerScreenState extends State<PlannerScreen>
               const SizedBox(height: 16),
               Center(
                 child: GestureDetector(
-                  // Long-press the printer to sign out — keeps the UI
-                  // free of a persistent email/sign-out line.
-                  onLongPress: TasksService.isSignedIn ? _handleSignOut : null,
+                  // Long-press the printer to change the server or
+                  // disconnect — keeps the UI free of a settings button.
+                  onLongPress: _showConnectDialog,
                   child: AnimatedBuilder(
                     animation: _lightController,
                     builder: (_, __) => CustomPaint(
@@ -244,9 +331,9 @@ class _PlannerScreenState extends State<PlannerScreen>
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 40),
                       child: Text(
-                        TasksService.isSignedIn
+                        TasksService.isConfigured
                             ? 'hit print to\nfetch your tasks'
-                            : 'sign in to load\nyour google tasks',
+                            : 'connect to your\nplanner server',
                         textAlign: TextAlign.center,
                         style: GoogleFonts.pressStart2p(
                           fontSize: 6,
@@ -296,8 +383,8 @@ class _PlannerScreenState extends State<PlannerScreen>
                             color: const Color(0xFF2e1a08), width: 2),
                       ),
                       child: Text(
-                        !TasksService.isSignedIn
-                            ? '[ SIGN IN & PRINT ]'
+                        !TasksService.isConfigured
+                            ? '[ CONNECT & PRINT ]'
                             : _printed ? '[ REPRINT ]' : '[ PRINT ]',
                         textAlign: TextAlign.center,
                         style: GoogleFonts.pressStart2p(
@@ -551,7 +638,7 @@ class _TaskRow extends StatelessWidget {
               padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
               decoration: BoxDecoration(
                   border: Border.all(color: tagColor(task.tag), width: 1)),
-              child: Text(task.tag.name.toUpperCase(),
+              child: Text(task.tag.label.toUpperCase(),
                 style: GoogleFonts.pressStart2p(
                     fontSize: 5, color: tagColor(task.tag), letterSpacing: 0.5),
               ),

@@ -1,0 +1,259 @@
+import { beforeEach, describe, expect, it } from 'vitest';
+import { todayIn } from '../src/dates';
+import { handleRequest } from '../src/index';
+import { MemoryTaskStore } from './memory-store';
+
+const TOKEN = 'test-token-0123456789abcdef';
+const BASE = 'https://planner.test';
+// 2026-10-02 05:30 UTC is still the evening of 2026-10-01 in Los Angeles (PDT).
+const NOW = new Date('2026-10-02T05:30:00Z');
+
+let store: MemoryTaskStore;
+const env = { API_TOKEN: TOKEN, PLANNER_TZ: 'America/Los_Angeles' };
+
+beforeEach(() => {
+  store = new MemoryTaskStore();
+});
+
+function call(path: string, init: RequestInit = {}, token: string | null = TOKEN) {
+  const headers = new Headers(init.headers);
+  if (token) headers.set('Authorization', `Bearer ${token}`);
+  return handleRequest(new Request(BASE + path, { ...init, headers }), env, store, NOW);
+}
+
+let rpcId = 0;
+async function rpc(method: string, params?: unknown, path = '/mcp') {
+  const res = await call(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: ++rpcId, method, params }),
+  });
+  return { status: res.status, body: (await res.json()) as any };
+}
+
+async function tool(name: string, args: unknown) {
+  const { body } = await rpc('tools/call', { name, arguments: args });
+  const text: string = body.result.content[0].text;
+  return { isError: body.result.isError === true, text, data: body.result.isError ? null : JSON.parse(text) };
+}
+
+describe('dates', () => {
+  it('uses the planner time zone, not UTC', () => {
+    expect(todayIn('America/Los_Angeles', NOW)).toBe('2026-10-01');
+    expect(todayIn('UTC', NOW)).toBe('2026-10-02');
+  });
+});
+
+describe('auth', () => {
+  it('rejects missing and wrong bearer tokens', async () => {
+    expect((await call('/api/tasks', {}, null)).status).toBe(401);
+    expect((await call('/api/tasks', {}, 'nope')).status).toBe(401);
+    expect((await call('/mcp', { method: 'POST', body: '{}' }, null)).status).toBe(401);
+  });
+
+  it('accepts the token as an /mcp/<token> path segment for header-less clients', async () => {
+    const { status } = await rpc('ping', undefined, `/mcp/${TOKEN}`);
+    expect(status).toBe(200);
+    const bad = await call('/mcp/wrong-token-wrong-token', { method: 'POST', body: '{}' }, null);
+    expect(bad.status).toBe(401);
+  });
+
+  it('does not accept the path token on the REST API', async () => {
+    expect((await call(`/api/tasks/${TOKEN}`, {}, null)).status).toBe(401);
+  });
+
+  it('refuses to run with a missing or weak secret', async () => {
+    for (const secret of [undefined, '', 'short']) {
+      const res = await handleRequest(
+        new Request(`${BASE}/api/tasks`, { headers: { Authorization: `Bearer ${secret}` } }),
+        { API_TOKEN: secret as string },
+        store,
+        NOW,
+      );
+      expect(res.status).toBe(500);
+    }
+  });
+});
+
+describe('mcp protocol', () => {
+  it('negotiates the protocol version and advertises tools', async () => {
+    const { body } = await rpc('initialize', {
+      protocolVersion: '2025-06-18',
+      capabilities: {},
+      clientInfo: { name: 't', version: '0' },
+    });
+    expect(body.result.protocolVersion).toBe('2025-06-18');
+    expect(body.result.capabilities.tools).toBeDefined();
+
+    const { body: future } = await rpc('initialize', { protocolVersion: '2099-01-01' });
+    expect(future.result.protocolVersion).toBe('2025-11-25');
+  });
+
+  it('acknowledges notifications with 202 and no body', async () => {
+    const res = await call('/mcp', {
+      method: 'POST',
+      body: JSON.stringify({ jsonrpc: '2.0', method: 'notifications/initialized' }),
+    });
+    expect(res.status).toBe(202);
+    expect(await res.text()).toBe('');
+  });
+
+  it('lists the five tools with schemas', async () => {
+    const { body } = await rpc('tools/list');
+    expect(body.result.tools.map((t: any) => t.name)).toEqual([
+      'set_daily_plan',
+      'list_tasks',
+      'add_task',
+      'update_task',
+      'delete_task',
+    ]);
+    for (const t of body.result.tools) expect(t.inputSchema.type).toBe('object');
+  });
+
+  it('answers unknown methods and tools with JSON-RPC errors', async () => {
+    expect((await rpc('nope')).body.error.code).toBe(-32601);
+    expect((await rpc('tools/call', { name: 'nope', arguments: {} })).body.error.code).toBe(-32602);
+  });
+
+  it('rejects malformed JSON and non-POST methods', async () => {
+    const bad = await call('/mcp', { method: 'POST', body: '{not json' });
+    expect(bad.status).toBe(400);
+    const get = await call('/mcp', { method: 'GET' });
+    expect(get.status).toBe(405);
+  });
+
+  it('answers batches', async () => {
+    const res = await call('/mcp', {
+      method: 'POST',
+      body: JSON.stringify([
+        { jsonrpc: '2.0', id: 1, method: 'ping' },
+        { jsonrpc: '2.0', method: 'notifications/initialized' },
+        { jsonrpc: '2.0', id: 2, method: 'tools/list' },
+      ]),
+    });
+    const body = (await res.json()) as any[];
+    expect(body.map((r) => r.id)).toEqual([1, 2]);
+  });
+});
+
+describe('mcp tools', () => {
+  it('publishes a plan for today in the planner time zone and reads it back', async () => {
+    const set = await tool('set_daily_plan', {
+      tasks: [
+        { title: 'Calc 3 problem set', tag: 'calculus3' },
+        { title: 'Solder PCB', tag: 'pcb' },
+        { title: 'Call grandma' },
+      ],
+    });
+    expect(set.data.date).toBe('2026-10-01');
+    expect(set.data.total).toBe(3);
+    expect(set.data.tasks.map((t: any) => t.tag)).toEqual(['calculus3', 'pcb', 'school']);
+
+    const list = await tool('list_tasks', {});
+    expect(list.data.tasks.map((t: any) => t.title)).toEqual([
+      'Calc 3 problem set',
+      'Solder PCB',
+      'Call grandma',
+    ]);
+  });
+
+  it('keeps tasks checked off when the same plan is published again', async () => {
+    const first = await tool('set_daily_plan', { tasks: [{ title: 'Practice scales' }, { title: 'Quiz' }] });
+    await tool('update_task', { id: first.data.tasks[0].id, done: true });
+
+    const again = await tool('set_daily_plan', {
+      tasks: [{ title: 'Quiz' }, { title: ' practice SCALES ' }, { title: 'New thing' }],
+    });
+    expect(again.data.tasks.map((t: any) => [t.title, t.done])).toEqual([
+      ['Quiz', false],
+      ['practice SCALES', true],
+      ['New thing', false],
+    ]);
+    expect(again.data.done).toBe(1);
+  });
+
+  it('keeps days separate and can clear one', async () => {
+    await tool('set_daily_plan', { date: '2026-10-05', tasks: [{ title: 'Later' }] });
+    await tool('set_daily_plan', { tasks: [{ title: 'Now' }] });
+    expect((await tool('list_tasks', { date: '2026-10-05' })).data.total).toBe(1);
+    await tool('set_daily_plan', { tasks: [] });
+    expect((await tool('list_tasks', {})).data.total).toBe(0);
+    expect((await tool('list_tasks', { date: '2026-10-05' })).data.total).toBe(1);
+  });
+
+  it('adds, updates and deletes single tasks', async () => {
+    const added = await tool('add_task', { title: 'Water plants', tag: 'photography' });
+    const id = added.data.added.id;
+    const updated = await tool('update_task', { id, title: 'Water the cactus', done: true });
+    expect(updated.data.updated).toMatchObject({ title: 'Water the cactus', done: true });
+    expect((await tool('delete_task', { id })).data.deleted).toBe(id);
+    expect((await tool('list_tasks', {})).data.total).toBe(0);
+  });
+
+  it('reports bad input as tool errors the model can act on', async () => {
+    const badTag = await tool('set_daily_plan', { tasks: [{ title: 'x', tag: 'gardening' }] });
+    expect(badTag.isError).toBe(true);
+    expect(badTag.text).toContain('calculus3');
+
+    expect((await tool('set_daily_plan', { tasks: [{ title: '   ' }] })).isError).toBe(true);
+    expect((await tool('set_daily_plan', { tasks: 'oops' })).isError).toBe(true);
+    expect((await tool('list_tasks', { date: '2026-02-31' })).isError).toBe(true);
+    expect((await tool('list_tasks', { date: 'tomorrow' })).isError).toBe(true);
+    expect((await tool('update_task', { id: 'missing', done: true })).isError).toBe(true);
+    expect((await tool('update_task', { id: 'missing' })).isError).toBe(true);
+    expect((await tool('delete_task', { id: 'missing' })).isError).toBe(true);
+  });
+
+  it('does not wipe the existing day when a replacement is invalid', async () => {
+    await tool('set_daily_plan', { tasks: [{ title: 'Keep me' }] });
+    await tool('set_daily_plan', { tasks: [{ title: 'ok' }, { title: '' }] });
+    expect((await tool('list_tasks', {})).data.tasks.map((t: any) => t.title)).toEqual(['Keep me']);
+  });
+});
+
+describe('rest api for the app', () => {
+  it('lists tasks for a date and defaults to today', async () => {
+    await tool('set_daily_plan', { tasks: [{ title: 'A', tag: 'sat' }] });
+    const res = await call('/api/tasks?date=2026-10-01');
+    const body = (await res.json()) as any;
+    expect(body.date).toBe('2026-10-01');
+    expect(body.tasks).toEqual([
+      { id: expect.any(String), date: '2026-10-01', title: 'A', tag: 'sat', done: false, position: 0 },
+    ]);
+    expect(((await (await call('/api/tasks')).json()) as any).tasks).toHaveLength(1);
+  });
+
+  it('toggles completion and shows up in MCP list_tasks', async () => {
+    const { data } = await tool('set_daily_plan', { tasks: [{ title: 'A' }] });
+    const id = data.tasks[0].id;
+    const patch = await call(`/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify({ done: true }) });
+    expect(patch.status).toBe(200);
+    expect(((await patch.json()) as any).done).toBe(true);
+    expect((await tool('list_tasks', {})).data.done).toBe(1);
+
+    await call(`/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify({ done: false }) });
+    expect((await tool('list_tasks', {})).data.done).toBe(0);
+  });
+
+  it('validates input and handles unknown ids', async () => {
+    expect((await call('/api/tasks?date=bad')).status).toBe(400);
+    const badBody = await call('/api/tasks/x', { method: 'PATCH', body: JSON.stringify({ done: 'yes' }) });
+    expect(badBody.status).toBe(400);
+    const notJson = await call('/api/tasks/x', { method: 'PATCH', body: 'nope' });
+    expect(notJson.status).toBe(400);
+    const missing = await call('/api/tasks/ghost', { method: 'PATCH', body: JSON.stringify({ done: true }) });
+    expect(missing.status).toBe(404);
+    expect((await call('/api/tasks/ghost', { method: 'DELETE' })).status).toBe(404);
+  });
+
+  it('deletes tasks', async () => {
+    const { data } = await tool('set_daily_plan', { tasks: [{ title: 'A' }] });
+    const res = await call(`/api/tasks/${data.tasks[0].id}`, { method: 'DELETE' });
+    expect(res.status).toBe(200);
+    expect((await tool('list_tasks', {})).data.total).toBe(0);
+  });
+
+  it('404s unknown routes without requiring auth', async () => {
+    expect((await call('/nope', {}, null)).status).toBe(404);
+  });
+});

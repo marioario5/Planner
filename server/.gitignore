@@ -1,0 +1,6 @@
+# The repo-root .gitignore is an allowlist (`*`), so re-include everything here
+# and then block the things that must never be committed.
+!*
+node_modules/
+.wrangler/
+.dev.vars

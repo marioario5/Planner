@@ -33,14 +33,6 @@ jobs:
           /usr/libexec/PlistBuddy -c "Set :CFBundleName Planner" ios/Runner/Info.plist
           /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Planner" ios/Runner/Info.plist
 
-      - name: Inject Google Sign-In client ID
-        run: |
-          /usr/libexec/PlistBuddy -c "Add :GIDClientID string 1036343782202-ncvphkc4aimo4u9vphar72vl14ggrgtm.apps.googleusercontent.com" ios/Runner/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes array" ios/Runner/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0 dict" ios/Runner/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" ios/Runner/Info.plist
-          /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string com.googleusercontent.apps.1036343782202-ncvphkc4aimo4u9vphar72vl14ggrgtm" ios/Runner/Info.plist
-
       - name: Install CocoaPods dependencies
         run: |
           cd ios

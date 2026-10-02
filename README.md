@@ -1,6 +1,12 @@
 # cozy_planner
 
-A new Flutter project.
+A pixel-art receipt printer for your day. A scheduled Claude routine publishes the
+day's tasks to a small server over MCP; the app prints them and syncs check-offs back.
+
+- `lib/` — the Flutter app
+- `server/` — the Cloudflare Worker (MCP + REST). Setup is in [server/README.md](server/README.md)
+
+## Flutter boilerplate
 
 ## Getting Started
 

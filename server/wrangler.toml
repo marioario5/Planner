@@ -1,0 +1,13 @@
+name = "cozy-planner"
+main = "src/index.ts"
+compatibility_date = "2026-09-01"
+
+[vars]
+# IANA zone used when a request doesn't say which day it means.
+PLANNER_TZ = "America/Los_Angeles"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "cozy-planner"
+# Paste the id printed by `npx wrangler d1 create cozy-planner`.
+database_id = "17b6b197-f29d-4ee9-bbee-c9f11676883f"
