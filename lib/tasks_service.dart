@@ -101,6 +101,7 @@ class TasksService {
                 label: t['title'] as String,
                 done: t['done'] as bool,
                 tag: _tagFromName(t['tag'] as String?),
+                plan: (t['plan'] as String?) == 'B' ? 'B' : 'A', // absent on an older server
                 start: t['start'] as String?,
                 minutes: t['minutes'] as int?,
                 notes: t['notes'] as String?,
@@ -112,7 +113,6 @@ class TasksService {
           .map((s) => InfoSection(
                 title: s['title'] as String,
                 body: s['body'] as String,
-                front: s['front'] == true,
               ))
           .toList();
       return DayPlan(

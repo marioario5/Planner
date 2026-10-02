@@ -14,11 +14,11 @@ Claude routine ──MCP──▶  Worker + D1  ◀──REST──  Flutter app
 
 | Tool | What it does |
 | --- | --- |
-| `set_daily_plan` | Replace a day's list with `tasks: [{title, tag?, start?, minutes?, notes?, siteKey?}]`. Re-publishing keeps tasks checked off if the title matches. |
-| `set_day_info` | Replace the day's headline and info sections: `headline?`, `sections: [{title, body, front?}]`. Call with nothing to clear. |
-| `list_tasks` | The day's tasks with ids, `done` flags and the local time each was checked off (`completed`). |
-| `get_history` | The last `days` (default 7, max 31) ending at `through` (default today): each day's tasks with done / missed and check-off times. How the routine sees what slipped. |
-| `add_task` | Append one task. |
+| `set_daily_plan` | Replace one plan's list for a day: `plan?` (`A` default, or `B`) and `tasks: [{title, tag?, start?, minutes?, notes?, siteKey?}]`. Re-publishing keeps tasks checked off if the title matches. |
+| `set_day_info` | Replace the day's headline and info sections: `headline?`, `sections: [{title, body}]`. Call with nothing to clear. |
+| `list_tasks` | One plan's tasks (A unless `plan` is given) with ids, `done` flags and check-off times (`completed`), plus `plans` showing which plans exist. |
+| `get_history` | The last `days` (default 7, max 31) ending at `through` (default today): each day's tasks with done / missed and check-off times, for the plan he followed (the one with more check-offs, A on a tie) plus `other_plan` totals. How the routine sees what slipped. |
+| `add_task` | Append one task to a plan (`plan?`, A by default). |
 | `update_task` | Change title / tag / time / notes, or set `done`. Pass `null` to clear `start`, `minutes` or `notes`. |
 | `delete_task` | Remove a task. |
 
@@ -29,16 +29,24 @@ Each task can carry a time and detail, so titles stay short:
 - `minutes`: planned length, shown next to the time (`3:30pm · 25m`).
 - `notes`: detail behind a "+ how to start" tap in the app (start move, if-then cue, method, break).
 
+### Plan A and Plan B
+
+A day can carry two complete lists: **Plan A** (the normal day) and **Plan B** (the backup, e.g. a 4:30 start). Each is
+published with its own `set_daily_plan` call (`plan: "A"` or `"B"`); publishing one never touches the other, and
+check-offs are kept per plan. The app shows a small **A / B switcher** only when a day has a Plan B, and its progress bar
+follows the plan you're viewing. For `get_history`, a day counts as the plan with more tasks checked off (A on a tie), so
+it is never double-counted.
+
 ### Info sections
 
-`set_day_info` lets Claude write everything that isn't a task. Each section is a title and a plain-text body
-(start a line with `- ` for a bullet):
+`set_day_info` lets Claude write everything that isn't a task: a `headline` (shown at the top of the receipt) and
+`sections`, each a title and a plain-text body. **Every section is a button in the app**, in the order Claude gives them
+(warnings, pre-start, next PCB work, at school, deviations, if you drift), so the receipt itself stays clean.
 
-- `front: true` sections are printed on the **briefing** side of the receipt (headline, warnings, pre-start checklist).
-  Tapping the briefing flips the paper over to the task list.
-- every other section gets its own **button** in the app (next PCB work, at school, deviations, if you drift).
+In a body, a line starting with `- ` is a bullet, and a line starting with `[ ] ` is a **checklist item** he can tick
+in the app (the button shows progress like `2/4 PRE-START`). Ticks live on the phone and reset each day.
+(An older `front` flag is accepted and ignored.)
 
-If a day has no headline and no front sections, the app skips the briefing and prints the tasks directly.
 `set_daily_plan` and `set_day_info` are independent: re-publishing one never touches the other.
 
 `date` is optional everywhere and defaults to today in `PLANNER_TZ` (see `wrangler.toml`).
@@ -64,6 +72,7 @@ npx wrangler secret put API_TOKEN       # paste the token
 npm run db:migrate:remote   # 0002: time, length and notes on tasks (run once; errors if already applied)
 npm run db:info:remote      # 0003: headline + info sections (safe to repeat)
 npm run db:sync:remote      # 0004: site sync columns (run once; errors if already applied)
+npm run db:plans:remote     # 0005: Plan A / Plan B (run once; errors if already applied)
 npm run deploy
 ```
 
@@ -76,7 +85,9 @@ npx wrangler d1 execute cozy-planner --remote --command "ALTER TABLE tasks ADD C
 
 (or `npx wrangler logout` then `npx wrangler login`). A failed run changes nothing, so it is safe to retry.
 
-Always migrate before deploying; the new code reads columns and a table the old database doesn't have.
+Always migrate before deploying, and deploy before you update the planner rules: the new code reads columns the old
+database doesn't have, and an old server would treat a `plan: "B"` call as a replacement for Plan A.
+For 0005 with `--command`: `ALTER TABLE tasks ADD COLUMN plan TEXT NOT NULL DEFAULT 'A';`
 A brand-new database only needs `db:init:remote`.
 
 Until `API_TOKEN` is set (16+ characters) every endpoint except `/` answers 500, so a half-deployed

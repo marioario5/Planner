@@ -1,10 +1,22 @@
 enum TaskTag { school, calculus3, sat, pcb, photography }
 
+/// "15:30" -> "3:30pm". Returns the input unchanged if it isn't HH:MM.
+String formatClock(String hhmm) {
+  final parts = hhmm.split(':');
+  final h = parts.length == 2 ? int.tryParse(parts[0]) : null;
+  if (h == null) return hhmm;
+  final h12 = h % 12 == 0 ? 12 : h % 12;
+  return '$h12:${parts[1]}${h >= 12 ? 'pm' : 'am'}';
+}
+
 class Task {
   final String id;
   String label;
   bool done;
   TaskTag tag;
+
+  /// 'A' (the normal day) or 'B' (the backup plan).
+  final String plan;
 
   /// 24-hour "HH:MM", or null for an untimed task.
   final String? start;
@@ -16,6 +28,7 @@ class Task {
     required this.label,
     this.done = false,
     required this.tag,
+    this.plan = 'A',
     this.start,
     this.minutes,
     this.notes,
@@ -25,25 +38,20 @@ class Task {
   String? get timeLabel {
     final s = start;
     if (s == null) return null;
-    final parts = s.split(':');
-    final h = parts.length == 2 ? int.tryParse(parts[0]) : null;
-    if (h == null) return s;
-    final h12 = h % 12 == 0 ? 12 : h % 12;
-    final time = '$h12:${parts[1]}${h >= 12 ? 'pm' : 'am'}';
+    final time = formatClock(s);
     return minutes == null ? time : '$time · ${minutes}m';
   }
 }
 
-/// A titled block of text Claude writes for the day. Front sections are printed
-/// on the briefing side of the receipt; the rest open from a button.
+/// A titled block of text Claude writes for the day. Each one is a button.
 class InfoSection {
   final String title;
   final String body;
-  final bool front;
-  const InfoSection({required this.title, required this.body, required this.front});
+  const InfoSection({required this.title, required this.body});
 }
 
 class DayPlan {
+  /// Every plan's tasks for the day (Plan A and, if there is one, Plan B).
   final List<Task> tasks;
   final String? headline;
   final List<InfoSection> sections;

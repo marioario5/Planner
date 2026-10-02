@@ -15,7 +15,9 @@
     "db:info:local": "wrangler d1 execute cozy-planner --local --file=migrations/0003_day_info.sql",
     "db:info:remote": "wrangler d1 execute cozy-planner --remote --file=migrations/0003_day_info.sql",
     "db:migrate:local": "wrangler d1 execute cozy-planner --local --file=migrations/0002_time_and_notes.sql",
-    "db:migrate:remote": "wrangler d1 execute cozy-planner --remote --file=migrations/0002_time_and_notes.sql"
+    "db:migrate:remote": "wrangler d1 execute cozy-planner --remote --file=migrations/0002_time_and_notes.sql",
+    "db:plans:local": "wrangler d1 execute cozy-planner --local --file=migrations/0005_plans.sql",
+    "db:plans:remote": "wrangler d1 execute cozy-planner --remote --file=migrations/0005_plans.sql"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261002.1",

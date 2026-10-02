@@ -2,6 +2,7 @@ import {
   normalizeTitle,
   type DayInfo,
   type NewTask,
+  type Plan,
   type Tag,
   type Task,
   type TaskPatch,
@@ -11,6 +12,7 @@ import {
 interface Row {
   id: string;
   date: string;
+  plan: string;
   title: string;
   tag: string;
   start_time: string | null;
@@ -28,6 +30,7 @@ function toTask(row: Row): Task {
   return {
     id: row.id,
     date: row.date,
+    plan: row.plan as Plan,
     title: row.title,
     tag: row.tag as Tag,
     start: row.start_time,
@@ -45,8 +48,8 @@ function toTask(row: Row): Task {
 const newId = () => crypto.randomUUID().slice(0, 8);
 
 const INSERT = `INSERT INTO tasks
-  (id, date, title, tag, start_time, minutes, notes, site_key, done, done_at, position, created_at, completed_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  (id, date, plan, title, tag, start_time, minutes, notes, site_key, done, done_at, position, created_at, completed_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 export class D1TaskStore implements TaskStore {
   constructor(private readonly db: D1Database) {}
@@ -56,7 +59,7 @@ export class D1TaskStore implements TaskStore {
       .prepare(
         // Timed tasks in clock order, untimed last, then the order Claude listed them.
         `SELECT * FROM tasks WHERE date = ?
-         ORDER BY start_time IS NULL, start_time, position, created_at`,
+         ORDER BY plan, start_time IS NULL, start_time, position, created_at`,
       )
       .bind(date)
       .all<Row>();
@@ -67,19 +70,19 @@ export class D1TaskStore implements TaskStore {
     const { results } = await this.db
       .prepare(
         `SELECT * FROM tasks WHERE date >= ? AND date <= ?
-         ORDER BY date, start_time IS NULL, start_time, position, created_at`,
+         ORDER BY date, plan, start_time IS NULL, start_time, position, created_at`,
       )
       .bind(from, to)
       .all<Row>();
     return results.map(toTask);
   }
 
-  async add(date: string, task: NewTask): Promise<Task> {
+  async add(date: string, plan: Plan, task: NewTask): Promise<Task> {
     const id = newId();
     const position = (
       await this.db
-        .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS next FROM tasks WHERE date = ?')
-        .bind(date)
+        .prepare('SELECT COALESCE(MAX(position), -1) + 1 AS next FROM tasks WHERE date = ? AND plan = ?')
+        .bind(date, plan)
         .first<{ next: number }>()
     )?.next ?? 0;
     await this.db
@@ -87,6 +90,7 @@ export class D1TaskStore implements TaskStore {
       .bind(
         id,
         date,
+        plan,
         task.title,
         task.tag,
         task.start,
@@ -103,14 +107,16 @@ export class D1TaskStore implements TaskStore {
     return (await this.get(id))!;
   }
 
-  async replaceDay(date: string, tasks: NewTask[]): Promise<Task[]> {
+  async replaceDay(date: string, plan: Plan, tasks: NewTask[]): Promise<Task[]> {
     // Carry check-offs across a re-publish by title, plus when they were toggled,
     // so the site sync can still tell which side changed last.
     const previous = new Map<string, Task>();
-    for (const t of await this.list(date)) previous.set(normalizeTitle(t.title), t);
+    for (const t of await this.list(date)) {
+      if (t.plan === plan) previous.set(normalizeTitle(t.title), t);
+    }
 
     const now = new Date().toISOString();
-    const statements = [this.db.prepare('DELETE FROM tasks WHERE date = ?').bind(date)];
+    const statements = [this.db.prepare('DELETE FROM tasks WHERE date = ? AND plan = ?').bind(date, plan)];
     tasks.forEach((task, position) => {
       const old = previous.get(normalizeTitle(task.title));
       const done = old?.done === true;
@@ -120,6 +126,7 @@ export class D1TaskStore implements TaskStore {
           .bind(
             newId(),
             date,
+            plan,
             task.title,
             task.tag,
             task.start,
@@ -135,7 +142,7 @@ export class D1TaskStore implements TaskStore {
       );
     });
     await this.db.batch(statements); // one transaction: no half-replaced day
-    return this.list(date);
+    return (await this.list(date)).filter((t) => t.plan === plan);
   }
 
   async update(id: string, patch: TaskPatch): Promise<Task | null> {

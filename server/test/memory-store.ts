@@ -2,6 +2,7 @@ import {
   normalizeTitle,
   type DayInfo,
   type NewTask,
+  type Plan,
   type Task,
   type TaskPatch,
   type TaskStore,
@@ -19,6 +20,7 @@ export class MemoryTaskStore implements TaskStore {
     return this.tasks
       .filter((t) => t.date === date)
       .sort((a, b) => {
+        if (a.plan !== b.plan) return a.plan < b.plan ? -1 : 1;
         if ((a.start === null) !== (b.start === null)) return a.start === null ? 1 : -1;
         if (a.start !== b.start) return (a.start ?? '') < (b.start ?? '') ? -1 : 1;
         return a.position - b.position;
@@ -33,19 +35,20 @@ export class MemoryTaskStore implements TaskStore {
     return days.flat();
   }
 
-  async add(date: string, task: NewTask): Promise<Task> {
-    const position = this.tasks.filter((t) => t.date === date).length;
-    return this.insert(date, task, position, false, null);
+  async add(date: string, plan: Plan, task: NewTask): Promise<Task> {
+    const position = this.tasks.filter((t) => t.date === date && t.plan === plan).length;
+    return this.insert(date, plan, task, position, false, null);
   }
 
-  async replaceDay(date: string, tasks: NewTask[]): Promise<Task[]> {
-    const previous = new Map((await this.list(date)).map((t) => [normalizeTitle(t.title), t]));
-    this.tasks = this.tasks.filter((t) => t.date !== date);
+  async replaceDay(date: string, plan: Plan, tasks: NewTask[]): Promise<Task[]> {
+    const mine = (await this.list(date)).filter((t) => t.plan === plan);
+    const previous = new Map(mine.map((t) => [normalizeTitle(t.title), t]));
+    this.tasks = this.tasks.filter((t) => !(t.date === date && t.plan === plan));
     tasks.forEach((t, i) => {
       const old = previous.get(normalizeTitle(t.title));
-      this.insert(date, t, i, old?.done === true, old?.doneAt ?? null);
+      this.insert(date, plan, t, i, old?.done === true, old?.doneAt ?? null);
     });
-    return this.list(date);
+    return (await this.list(date)).filter((t) => t.plan === plan);
   }
 
   async update(id: string, patch: TaskPatch): Promise<Task | null> {
@@ -88,10 +91,18 @@ export class MemoryTaskStore implements TaskStore {
     else this.info.set(date, info);
   }
 
-  private insert(date: string, task: NewTask, position: number, done: boolean, doneAt: number | null): Task {
+  private insert(
+    date: string,
+    plan: Plan,
+    task: NewTask,
+    position: number,
+    done: boolean,
+    doneAt: number | null,
+  ): Task {
     const row: Task = {
       id: `t${++this.seq}`,
       date,
+      plan,
       title: task.title,
       tag: task.tag,
       start: task.start,

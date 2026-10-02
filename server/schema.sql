@@ -3,6 +3,7 @@
 CREATE TABLE IF NOT EXISTS tasks (
   id           TEXT PRIMARY KEY,
   date         TEXT NOT NULL,                 -- planner day, YYYY-MM-DD
+  plan         TEXT NOT NULL DEFAULT 'A',     -- 'A' (normal day) or 'B' (backup plan)
   title        TEXT NOT NULL,
   tag          TEXT NOT NULL DEFAULT 'school',
   start_time   TEXT,                          -- 24-hour HH:MM, NULL = untimed

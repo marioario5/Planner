@@ -376,17 +376,14 @@ describe('day info (headline + sections)', () => {
     await tool('set_daily_plan', { tasks: [{ title: 'Calc 3', start: '15:30' }] });
     const set = await tool('set_day_info', { headline: 'Finish PLTW, then SAT practice', sections });
     expect(set.data.date).toBe('2026-10-01');
-    expect(set.data.sections).toEqual([
-      { title: 'Warnings', front: true },
-      { title: 'Pre-start', front: true },
-      { title: 'Next PCB work', front: false },
-    ]);
+    expect(set.data.sections).toEqual([{ title: 'Warnings' }, { title: 'Pre-start' }, { title: 'Next PCB work' }]);
 
     const rest = (await (await call('/api/tasks')).json()) as any;
     expect(rest.headline).toBe('Finish PLTW, then SAT practice');
     expect(rest.sections).toHaveLength(3);
-    expect(rest.sections[0]).toEqual({ title: 'Warnings', body: '- SAT date mismatch\n- Dr Dish still blocked', front: true });
-    expect(rest.sections[2].front).toBe(false);
+    // `front` from older callers is accepted but dropped: every section is a button now.
+    expect(rest.sections[0]).toEqual({ title: 'Warnings', body: '- SAT date mismatch\n- Dr Dish still blocked' });
+    expect(rest.sections.map((s: any) => s.front)).toEqual([undefined, undefined, undefined]);
     expect(rest.tasks).toHaveLength(1);
   });
 
@@ -428,7 +425,6 @@ describe('day info (headline + sections)', () => {
       { sections: 'nope' },
       { sections: [{ title: '', body: 'x' }] },
       { sections: [{ title: 'T', body: '   ' }] },
-      { sections: [{ title: 'T', body: 'x', front: 'yes' }] },
       { sections: [{ title: 'T'.repeat(61), body: 'x' }] },
       { sections: [{ title: 'T', body: 'x'.repeat(4001) }] },
       { sections: Array.from({ length: 13 }, () => ({ title: 'T', body: 'x' })) },
@@ -436,6 +432,102 @@ describe('day info (headline + sections)', () => {
     ];
     for (const args of bad) expect((await tool('set_day_info', args)).isError).toBe(true);
     expect(((await (await call('/api/tasks')).json()) as any).headline).toBe('keep');
+  });
+});
+
+describe('plan A and plan B', () => {
+  const plan = (p: 'A' | 'B', titles: string[]) =>
+    tool('set_daily_plan', { plan: p, tasks: titles.map((title, i) => ({ title, start: `1${5 + i}:30` })) });
+
+  it('keeps two complete lists for one day and replaces them independently', async () => {
+    await plan('A', ['A1', 'A2']);
+    await plan('B', ['B1']);
+    const a = await tool('list_tasks', {});
+    expect(a.data).toMatchObject({ plan: 'A', total: 2 });
+    expect(a.data.tasks.map((t: any) => t.title)).toEqual(['A1', 'A2']);
+    expect(a.data.plans).toEqual([{ plan: 'A', done: 0, total: 2 }, { plan: 'B', done: 0, total: 1 }]);
+
+    const b = await tool('list_tasks', { plan: 'B' });
+    expect(b.data.tasks.map((t: any) => [t.title, t.plan])).toEqual([['B1', 'B']]);
+
+    await plan('A', ['A3']); // replacing A leaves B alone
+    expect((await tool('list_tasks', { plan: 'B' })).data.total).toBe(1);
+    expect((await tool('list_tasks', {})).data.tasks.map((t: any) => t.title)).toEqual(['A3']);
+    await plan('B', []); // clearing B leaves A alone
+    expect((await tool('list_tasks', {})).data.total).toBe(1);
+    expect((await tool('list_tasks', {})).data.plans).toEqual([{ plan: 'A', done: 0, total: 1 }]);
+  });
+
+  it('defaults to plan A, so single-plan days behave as before', async () => {
+    const { data } = await tool('set_daily_plan', { tasks: [{ title: 'Only' }] });
+    expect(data.plan).toBe('A');
+    expect(data.tasks[0].plan).toBe('A');
+    expect((await tool('add_task', { title: 'Extra' })).data.added.plan).toBe('A');
+  });
+
+  it('adds to a chosen plan and keeps check-offs per plan', async () => {
+    await plan('A', ['Same title']);
+    const b = await plan('B', ['Same title']);
+    await tool('update_task', { id: b.data.tasks[0].id, done: true });
+    expect((await tool('list_tasks', {})).data.done).toBe(0);
+    expect((await tool('list_tasks', { plan: 'B' })).data.done).toBe(1);
+    await tool('add_task', { plan: 'B', title: 'B extra' });
+    expect((await tool('list_tasks', { plan: 'B' })).data.total).toBe(2);
+    const again = await plan('B', ['Same title', 'New']); // B keeps its own check-off
+    expect(again.data.tasks.map((t: any) => [t.title, t.done])).toEqual([['Same title', true], ['New', false]]);
+  });
+
+  it('rejects an unknown plan', async () => {
+    expect((await tool('set_daily_plan', { plan: 'C', tasks: [] })).isError).toBe(true);
+    expect((await tool('list_tasks', { plan: 'b' })).isError).toBe(true);
+    expect((await tool('add_task', { plan: 'X', title: 'x' })).isError).toBe(true);
+  });
+
+  it('serves both plans to the app, A first, and lets a B task be checked off', async () => {
+    await plan('B', ['B1']);
+    await plan('A', ['A1']);
+    const rest = (await (await call('/api/tasks')).json()) as any;
+    expect(rest.tasks.map((t: any) => [t.plan, t.title])).toEqual([['A', 'A1'], ['B', 'B1']]);
+    const res = await call(`/api/tasks/${rest.tasks[1].id}`, { method: 'PATCH', body: JSON.stringify({ done: true }) });
+    expect((await res.json()) as any).toMatchObject({ plan: 'B', done: true });
+    expect((await tool('list_tasks', { plan: 'A' })).data.done).toBe(0);
+  });
+
+  it('advertises the plan option on the tools that take it', async () => {
+    const { body } = await rpc('tools/list');
+    for (const name of ['set_daily_plan', 'list_tasks', 'add_task']) {
+      const tool = body.result.tools.find((t: any) => t.name === name);
+      expect(tool.inputSchema.properties.plan.enum, name).toEqual(['A', 'B']);
+    }
+  });
+
+  describe('history follows the plan he worked', () => {
+    const tick = async (p: 'A' | 'B', title: string) => {
+      const { data } = await tool('list_tasks', { plan: p });
+      await tool('update_task', { id: data.tasks.find((t: any) => t.title === title).id, done: true });
+    };
+
+    it('picks the plan with more check-offs and reports the other', async () => {
+      await plan('A', ['A1', 'A2']);
+      await plan('B', ['B1', 'B2', 'B3']);
+      await tick('B', 'B1');
+      await tick('B', 'B2');
+      await tick('A', 'A1');
+      const { data } = await tool('get_history', { days: 1 });
+      expect(data.days[0]).toMatchObject({ plan: 'B', done: 2, total: 3, other_plan: { plan: 'A', done: 1, total: 2 } });
+      expect(data.days[0].tasks.map((t: any) => t.title)).toEqual(['B1', 'B2', 'B3']);
+      expect(data).toMatchObject({ done: 2, total: 3 }); // never double-counted
+    });
+
+    it('prefers A on a tie, and handles B-only days', async () => {
+      await plan('A', ['A1']);
+      await plan('B', ['B1']);
+      expect((await tool('get_history', { days: 1 })).data.days[0]).toMatchObject({ plan: 'A', done: 0, total: 1 });
+      await tool('set_daily_plan', { date: '2026-09-30', plan: 'B', tasks: [{ title: 'Only B' }] });
+      const old = (await tool('get_history', { days: 2 })).data.days[0];
+      expect(old).toMatchObject({ date: '2026-09-30', plan: 'B', total: 1 });
+      expect(old.other_plan).toBeUndefined();
+    });
   });
 });
 
@@ -449,6 +541,7 @@ describe('rest api for the app', () => {
       {
         id: expect.any(String),
         date: '2026-10-01',
+        plan: 'A',
         title: 'A',
         tag: 'sat',
         start: null,

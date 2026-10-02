@@ -4,9 +4,14 @@
 export const TAGS = ['school', 'calculus3', 'sat', 'pcb', 'photography'] as const;
 export type Tag = (typeof TAGS)[number];
 
+/** A day can have two complete lists: Plan A (the normal day) and Plan B (the backup, e.g. a later start). */
+export const PLANS = ['A', 'B'] as const;
+export type Plan = (typeof PLANS)[number];
+
 export interface Task {
   id: string;
   date: string; // planner day, YYYY-MM-DD
+  plan: Plan;
   title: string;
   tag: Tag;
   /** 24-hour "HH:MM" in the planner's time zone, or null for untimed tasks. */
@@ -43,12 +48,10 @@ export interface TaskPatch {
   done?: boolean;
 }
 
-/** A titled block of text Claude writes for the day (warnings, pre-start, next PCB work...). */
+/** A titled block of text Claude writes for the day (warnings, pre-start, next PCB work...); each is a button in the app. */
 export interface InfoSection {
   title: string;
   body: string;
-  /** true = printed on the front "briefing" side; false = opened from a button. */
-  front: boolean;
 }
 
 export interface DayInfo {
@@ -57,13 +60,13 @@ export interface DayInfo {
 }
 
 export interface TaskStore {
-  /** Timed tasks in clock order, then untimed tasks in the order they were given. */
+  /** Every plan's tasks for the day: Plan A then Plan B, each timed tasks in clock order then untimed. */
   list(date: string): Promise<Task[]>;
   /** Tasks from `from` through `to` inclusive, ordered by date then like `list`. */
   listRange(from: string, to: string): Promise<Task[]>;
-  add(date: string, task: NewTask): Promise<Task>;
-  /** Replaces a day's list. Tasks whose title matches one already done stay done. */
-  replaceDay(date: string, tasks: NewTask[]): Promise<Task[]>;
+  add(date: string, plan: Plan, task: NewTask): Promise<Task>;
+  /** Replaces one plan's list for a day (the other plan is untouched). Tasks whose title matches one already done stay done. */
+  replaceDay(date: string, plan: Plan, tasks: NewTask[]): Promise<Task[]>;
   update(id: string, patch: TaskPatch): Promise<Task | null>;
   remove(id: string): Promise<boolean>;
   /** Applies a check-off that came from the progress site, keeping the site's timestamp. */
@@ -101,6 +104,12 @@ export function parseTag(value: unknown): Tag {
     return value as Tag;
   }
   throw new ValidationError(`tag must be one of: ${TAGS.join(', ')}`);
+}
+
+export function parsePlan(value: unknown): Plan {
+  if (value === undefined || value === null || value === '') return 'A';
+  if (typeof value === 'string' && (PLANS as readonly string[]).includes(value)) return value as Plan;
+  throw new ValidationError(`plan must be one of: ${PLANS.join(', ')}`);
 }
 
 export function parseStart(value: unknown): string | null {
@@ -186,7 +195,8 @@ function parseSection(value: unknown): InfoSection {
   if (typeof value !== 'object' || value === null) {
     throw new ValidationError('each section must be an object with a title and body');
   }
-  const { title, body, front } = value as Record<string, unknown>;
+  // Older callers may still send `front`; every section is a button now, so it is ignored.
+  const { title, body } = value as Record<string, unknown>;
   if (typeof title !== 'string' || title.trim() === '') {
     throw new ValidationError('section title must be a non-empty string');
   }
@@ -199,10 +209,7 @@ function parseSection(value: unknown): InfoSection {
   if (body.trim().length > MAX_SECTION_BODY) {
     throw new ValidationError(`section body must be at most ${MAX_SECTION_BODY} characters`);
   }
-  if (front !== undefined && front !== null && typeof front !== 'boolean') {
-    throw new ValidationError('section front must be true or false');
-  }
-  return { title: title.trim(), body: body.trim(), front: front === true };
+  return { title: title.trim(), body: body.trim() };
 }
 
 export function parseDayInfo(args: Record<string, unknown>): DayInfo {

@@ -5,6 +5,7 @@
 import { localTime, resolveDate, shiftDate } from './dates';
 import { DEFAULT_PREFIXES, isSyncable, reconcile, type SyncConfig } from './sync';
 import {
+  PLANS,
   TAGS,
   ValidationError,
   parseDayInfo,
@@ -12,6 +13,8 @@ import {
   parseNewTask,
   parseNewTasks,
   parsePatch,
+  parsePlan,
+  type Plan,
   type Task,
   type TaskStore,
 } from './tasks';
@@ -54,6 +57,13 @@ const notesProp = {
   description:
     'Detail shown when he taps the task: start move, if-then cue, method, stop time and break.',
 };
+const planProp = {
+  type: 'string',
+  enum: [...PLANS],
+  description:
+    'A = the normal day (default). B = the backup plan, a complete alternative list for the same day ' +
+    '(e.g. a later start). Each plan is replaced independently; publishing one never touches the other.',
+};
 const siteKeyProp = {
   type: 'string',
   pattern: '^[A-Za-z0-9_-]{1,80}$',
@@ -67,13 +77,15 @@ const TOOLS = [
   {
     name: 'set_daily_plan',
     description:
-      "Replace the whole task list for a day with the given tasks. Use this to publish a day's plan. Timed tasks are shown in clock order, then untimed ones in the order given. " +
+      "Replace one plan's task list for a day with the given tasks. Use this to publish a day's plan: call it once for Plan A and, if the day has a backup, once more with plan B. " +
+      'Timed tasks are shown in clock order, then untimed ones in the order given. ' +
       'Tasks the user already checked off stay checked if they appear again with the same title. ' +
-      'Pass an empty array to clear the day.',
+      'Pass an empty array to clear that plan.',
     inputSchema: {
       type: 'object',
       properties: {
         date: dateProp,
+        plan: planProp,
         tasks: {
           type: 'array',
           maxItems: 100,
@@ -99,9 +111,9 @@ const TOOLS = [
     name: 'set_day_info',
     description:
       "Replace the info that goes with a day's plan: a one-line headline plus titled sections of text. " +
-      'The app prints front=true sections on the first side of the receipt (the briefing he reads before starting: ' +
-      'warnings, pre-start checklist) and gives every other section its own button (e.g. next PCB work, at school, ' +
-      'deviations, if you drift). Section bodies are plain text; start lines with "- " for bullets. ' +
+      'The headline is shown at the top of the receipt. Every section becomes its own button in the app, in the order given ' +
+      '(e.g. warnings, pre-start checklist, next PCB work, at school, deviations, if you drift), so put the ones he should read first up front. ' +
+      'Section bodies are plain text; start lines with "- " for bullets. ' +
       'Call with no arguments to clear the day. Separate from set_daily_plan, so call both.',
     inputSchema: {
       type: 'object',
@@ -120,10 +132,6 @@ const TOOLS = [
             properties: {
               title: { type: 'string', minLength: 1, maxLength: 60 },
               body: { type: 'string', minLength: 1, maxLength: 4000 },
-              front: {
-                type: 'boolean',
-                description: 'true = printed on the briefing side. Default false = a button.',
-              },
             },
             required: ['title', 'body'],
           },
@@ -134,8 +142,10 @@ const TOOLS = [
   },
   {
     name: 'list_tasks',
-    description: 'List the tasks for a day with their ids and whether each is done.',
-    inputSchema: { type: 'object', properties: { date: dateProp } },
+    description:
+      'List one plan\'s tasks for a day (Plan A unless you pass plan) with their ids and whether each is done. ' +
+      '`plans` shows which plans exist for the day and how many tasks are done in each.',
+    inputSchema: { type: 'object', properties: { date: dateProp, plan: planProp } },
     annotations: { readOnlyHint: true },
   },
   {
@@ -143,6 +153,8 @@ const TOOLS = [
     description:
       'What was planned and what he actually checked off over the last several days, oldest first. ' +
       'Each day lists its tasks with done true/false and the local time (HH:MM) each was checked off. ' +
+      'If a day had both Plan A and Plan B, the day shows the one he followed (the plan with more tasks checked off, A on a tie) ' +
+      'and `other_plan` gives the other one\'s totals. ' +
       'Days with no tasks are left out. Use it to see what slipped and what to carry forward. ' +
       'A task not checked off may still have been done: he has to tick it in the app.',
     inputSchema: {
@@ -164,11 +176,12 @@ const TOOLS = [
   },
   {
     name: 'add_task',
-    description: "Append one task to the end of a day's list.",
+    description: "Append one task to the end of a plan's list for the day (Plan A unless you pass plan).",
     inputSchema: {
       type: 'object',
       properties: {
         date: dateProp,
+        plan: planProp,
         title: titleProp,
         tag: tagProp,
         start: startProp,
@@ -221,6 +234,7 @@ type Json = Record<string, unknown>;
 
 const view = (t: Task, timeZone: string) => ({
   id: t.id,
+  plan: t.plan,
   title: t.title,
   tag: t.tag,
   start: t.start,
@@ -232,13 +246,22 @@ const view = (t: Task, timeZone: string) => ({
   completed: t.done && t.completedAt ? localTime(t.completedAt, timeZone) : null,
 });
 
-function summarize(date: string, tasks: Task[], timeZone: string): Json {
+function summarize(date: string, plan: Plan, tasks: Task[], timeZone: string): Json {
   return {
     date,
+    plan,
     done: tasks.filter((t) => t.done).length,
     total: tasks.length,
     tasks: tasks.map((t) => view(t, timeZone)),
   };
+}
+
+/** Which plans exist among these tasks, with how many are done in each. */
+function planTotals(all: Task[]): { plan: Plan; done: number; total: number }[] {
+  return PLANS.filter((p) => all.some((t) => t.plan === p)).map((p) => {
+    const mine = all.filter((t) => t.plan === p);
+    return { plan: p, done: mine.filter((t) => t.done).length, total: mine.length };
+  });
 }
 
 function parseDays(value: unknown): number {
@@ -276,14 +299,20 @@ async function history(args: Json, ctx: McpContext): Promise<Json> {
 
   let done = 0;
   let total = 0;
-  const out = [...byDate.entries()].map(([date, tasks]) => {
-    const dayDone = tasks.filter((t) => t.done).length;
-    done += dayDone;
-    total += tasks.length;
+  const out = [...byDate.entries()].map(([date, dayTasks]) => {
+    // He follows one plan a day. Take the one with more check-offs; A wins a tie.
+    const totals = planTotals(dayTasks);
+    const followed = totals.reduce((best, p) => (p.done > best.done ? p : best));
+    const other = totals.find((p) => p.plan !== followed.plan);
+    const tasks = dayTasks.filter((t) => t.plan === followed.plan);
+    done += followed.done;
+    total += followed.total;
     return {
       date,
-      done: dayDone,
-      total: tasks.length,
+      plan: followed.plan,
+      done: followed.done,
+      total: followed.total,
+      ...(other ? { other_plan: other } : {}),
       tasks: tasks.map((t) => ({
         title: t.title,
         tag: t.tag,
@@ -302,11 +331,13 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
   switch (name) {
     case 'set_daily_plan': {
       const date = resolveDate(args.date, timeZone, now);
+      const plan = parsePlan(args.plan);
       const parsed = parseNewTasks(args.tasks);
       checkSiteKeys(parsed.map((t) => t.siteKey), ctx);
-      const tasks = await store.replaceDay(date, parsed);
-      await reconcile(store, tasks, ctx.sync); // a lesson already ticked on the site arrives ticked
-      return summarize(date, tasks, timeZone);
+      await store.replaceDay(date, plan, parsed);
+      const all = await store.list(date);
+      await reconcile(store, all, ctx.sync); // a lesson already ticked on the site arrives ticked
+      return summarize(date, plan, all.filter((t) => t.plan === plan), timeZone);
     }
     case 'set_day_info': {
       const date = resolveDate(args.date, timeZone, now);
@@ -315,14 +346,15 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
       return {
         date,
         headline: info.headline,
-        sections: info.sections.map((s) => ({ title: s.title, front: s.front })),
+        sections: info.sections.map((s) => ({ title: s.title })),
       };
     }
     case 'list_tasks': {
       const date = resolveDate(args.date, timeZone, now);
-      const tasks = await store.list(date);
-      await reconcile(store, tasks, ctx.sync);
-      return summarize(date, tasks, timeZone);
+      const plan = parsePlan(args.plan);
+      const all = await store.list(date);
+      await reconcile(store, all, ctx.sync);
+      return { ...summarize(date, plan, all.filter((t) => t.plan === plan), timeZone), plans: planTotals(all) };
     }
     case 'get_history':
       return history(args, ctx);
@@ -330,7 +362,7 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
       const date = resolveDate(args.date, timeZone, now);
       const parsed = parseNewTask(args);
       checkSiteKeys([parsed.siteKey], ctx);
-      const added = await store.add(date, parsed);
+      const added = await store.add(date, parsePlan(args.plan), parsed);
       await reconcile(store, [added], ctx.sync);
       return { added: view(added, timeZone), date };
     }

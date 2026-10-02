@@ -26,6 +26,7 @@ const unauthorized = () =>
 const apiView = (t: Task) => ({
   id: t.id,
   date: t.date,
+  plan: t.plan,
   title: t.title,
   tag: t.tag,
   start: t.start,

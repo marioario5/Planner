@@ -31,14 +31,32 @@ Color tagColor(TaskTag tag) {
 }
 
 TextStyle _px(double size, Color color,
-        {double height = 1.8, double? letterSpacing}) =>
+        {double height = 1.8, double? letterSpacing, TextDecoration? decoration}) =>
     GoogleFonts.pressStart2p(
-        fontSize: size, color: color, height: height, letterSpacing: letterSpacing);
+        fontSize: size,
+        color: color,
+        height: height,
+        letterSpacing: letterSpacing,
+        decoration: decoration,
+        decorationColor: color);
 
-/// Plain-text block from Claude. Lines starting with "- " or "* " get a bullet.
+/// A checklist line: "[ ] item", "- [ ] item" or "* [ ] item".
+final _checkRe = RegExp(r'^\s*(?:[-*]\s*)?\[[ xX]?\]\s+(.*)$');
+
+List<String> _checkItems(String body) => [
+      for (final line in body.split('\n'))
+        if (_checkRe.hasMatch(line)) _checkRe.firstMatch(line)!.group(1)!.trim(),
+    ];
+
+/// Plain-text block from Claude. "[ ] item" lines become tickable boxes, lines
+/// starting with "- " or "* " get a bullet, everything else is plain text.
 class _InfoBody extends StatelessWidget {
   final String text;
-  const _InfoBody(this.text);
+  final String section;
+  final Set<String> ticks;
+  final void Function(String key)? onTick;
+  const _InfoBody(this.text,
+      {this.section = '', this.ticks = const {}, this.onTick});
 
   @override
   Widget build(BuildContext context) {
@@ -46,20 +64,59 @@ class _InfoBody extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         for (final raw in text.split('\n'))
-          if (raw.trim().isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 4),
-              child: RegExp(r'^\s*[-*] ').hasMatch(raw)
-                  ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                      Text('• ', style: _px(5, cInkLight, height: 2)),
-                      Expanded(
-                        child: Text(raw.replaceFirst(RegExp(r'^\s*[-*] '), ''),
-                            style: _px(5, cInk, height: 2)),
-                      ),
-                    ])
-                  : Text(raw.trim(), style: _px(5, cInk, height: 2)),
-            ),
+          if (raw.trim().isNotEmpty) _line(raw),
       ],
+    );
+  }
+
+  Widget _line(String raw) {
+    final check = _checkRe.firstMatch(raw);
+    if (check != null && onTick != null) {
+      final item = check.group(1)!.trim();
+      final key = '$section|$item';
+      final ticked = ticks.contains(key);
+      final dim = cInkLight.withValues(alpha: 0.6);
+      return GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => onTick!(key),
+        child: Padding(
+          padding: const EdgeInsets.only(bottom: 8),
+          child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            Container(
+              width: 12, height: 12,
+              margin: const EdgeInsets.only(top: 1),
+              decoration: BoxDecoration(
+                color: ticked ? cSage : cPaper,
+                border: Border.all(color: ticked ? cSage : cInk, width: 2),
+              ),
+              child: ticked
+                  ? const Icon(Icons.check, size: 8, color: Colors.white)
+                  : null,
+            ),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(item,
+                  style: _px(5, ticked ? dim : cInk,
+                      height: 2,
+                      decoration:
+                          ticked ? TextDecoration.lineThrough : null)),
+            ),
+          ]),
+        ),
+      );
+    }
+    final bullet = RegExp(r'^\s*[-*] ');
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 4),
+      child: bullet.hasMatch(raw)
+          ? Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('• ', style: _px(5, cInkLight, height: 2)),
+              Expanded(
+                child: Text(raw.replaceFirst(bullet, ''),
+                    style: _px(5, cInk, height: 2)),
+              ),
+            ])
+          : Text(raw.trim(), style: _px(5, cInk, height: 2)),
     );
   }
 }
@@ -81,16 +138,14 @@ class _PlannerScreenState extends State<PlannerScreen>
   String? _error;
   String _vibe    = 'Matthew 11:29';
 
-  List<Task> _tasks = [];
+  List<Task> _tasks = [];            // every plan's tasks for today
   String? _headline;
   List<InfoSection> _sections = [];
-  bool _showBriefing = false;
+  String _plan = 'A';                // which plan is showing
+  Set<String> _ticks = {};           // ticked checklist items, "Section|item"
 
-  List<InfoSection> get _frontSections =>
-      _sections.where((s) => s.front).toList();
-  List<InfoSection> get _buttonSections =>
-      _sections.where((s) => !s.front).toList();
-  bool get _hasBriefing => _headline != null || _frontSections.isNotEmpty;
+  List<Task> get _planTasks => _tasks.where((t) => t.plan == _plan).toList();
+  bool get _hasPlanB => _tasks.any((t) => t.plan == 'B');
 
   @override
   void initState() {
@@ -109,6 +164,7 @@ class _PlannerScreenState extends State<PlannerScreen>
     // Pick up the saved server address and token on launch
     _loadConnection();
     _loadVibe();
+    _loadTicks();
   }
 
   Future<void> _loadConnection() async {
@@ -146,10 +202,10 @@ class _PlannerScreenState extends State<PlannerScreen>
     super.dispose();
   }
 
-  int get _doneCount => _tasks.where((t) => t.done).length;
+  int get _doneCount => _planTasks.where((t) => t.done).length;
 
   String get _progressMessage {
-    final total = _tasks.length;
+    final total = _planTasks.length;
     final done  = _doneCount;
     if (done == 0 || total == 0) return '';
     if (done == total) return '✦✦ YOU DID IT! ✦✦';
@@ -270,7 +326,7 @@ class _PlannerScreenState extends State<PlannerScreen>
           _tasks = [];
           _headline = null;
           _sections = [];
-          _showBriefing = false;
+          _plan = 'A';
           _printed = false;
           _error = null;
         });
@@ -311,8 +367,9 @@ class _PlannerScreenState extends State<PlannerScreen>
       _headline  = plan.headline;
       _sections  = plan.sections;
       _printed   = true;
-      // Start on the briefing when Claude wrote one; otherwise straight to tasks.
-      _showBriefing = _hasBriefing;
+      // Keep the plan he was on if it still exists; otherwise A, or B if A is empty.
+      final hasA = _tasks.any((t) => t.plan == 'A');
+      if (!_tasks.any((t) => t.plan == _plan)) _plan = hasA || !_hasPlanB ? 'A' : 'B';
     });
 
     _feedController.reset();
@@ -506,13 +563,7 @@ class _PlannerScreenState extends State<PlannerScreen>
                 _dashedDivider(),
                 const SizedBox(height: 14),
 
-                AnimatedSwitcher(
-                  duration: const Duration(milliseconds: 450),
-                  transitionBuilder: _flipTransition,
-                  child: _showBriefing
-                      ? _buildBriefingSide(key: const ValueKey('briefing'))
-                      : _buildTaskSide(key: const ValueKey('tasks')),
-                ),
+                _buildTaskSide(),
               ]),
             ),
           ]),
@@ -531,175 +582,203 @@ class _PlannerScreenState extends State<PlannerScreen>
     );
   }
 
-  // ── Receipt sides ───────────────────────────────────────────────────────
+  // ── Receipt ─────────────────────────────────────────────────────────────
 
-  void _flip() {
-    HapticFeedback.selectionClick();
-    setState(() => _showBriefing = !_showBriefing);
-  }
-
-  /// Both the outgoing and incoming side run this: it turns the paper edge-on
-  /// as one side leaves and opens it back up as the other arrives.
-  Widget _flipTransition(Widget child, Animation<double> animation) {
-    return AnimatedBuilder(
-      animation: animation,
-      child: child,
-      builder: (context, child) => Transform(
-        alignment: Alignment.center,
-        transform: Matrix4.identity()
-          ..setEntry(3, 2, 0.001)
-          ..rotateY((1 - animation.value) * pi / 2),
-        child: child,
+  Widget _planChip(String p) {
+    final selected = _plan == p;
+    final starts = _tasks
+        .where((t) => t.plan == p && t.start != null)
+        .map((t) => t.start!)
+        .toList()
+      ..sort();
+    final label = 'PLAN $p${starts.isEmpty ? '' : '\n${formatClock(starts.first)}'}';
+    return Expanded(
+      child: GestureDetector(
+        onTap: () {
+          HapticFeedback.selectionClick();
+          setState(() => _plan = p);
+        },
+        child: Container(
+          margin: EdgeInsets.only(right: p == 'A' ? 6 : 0),
+          padding: const EdgeInsets.symmetric(vertical: 8),
+          decoration: BoxDecoration(
+            color: selected ? cInk : cPaper,
+            border: Border.all(color: cInk, width: 2),
+          ),
+          child: Text(label,
+              textAlign: TextAlign.center,
+              style: _px(5, selected ? cPaper : cInk, height: 1.6)),
+        ),
       ),
     );
   }
 
-  /// Front of the receipt: the headline and the sections Claude marked `front`.
-  Widget _buildBriefingSide({Key? key}) {
-    final front = _frontSections;
-    return GestureDetector(
-      key: key,
-      behavior: HitTestBehavior.opaque,
-      onTap: _flip,
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        if (_headline != null) ...[
-          Text(_headline!,
-              style: _px(6, cInk, height: 2)),
-          const SizedBox(height: 12),
-          _dashedDivider(),
-          const SizedBox(height: 12),
-        ],
-        for (final section in front) ...[
-          Text(section.title.toUpperCase(),
-              style: _px(6, cInkLight, letterSpacing: 0.5)),
-          const SizedBox(height: 6),
-          _InfoBody(section.body),
-          const SizedBox(height: 12),
-          _dashedDivider(),
-          const SizedBox(height: 12),
-        ],
-        Center(
-          child: Text('tap to flip  >  ${_tasks.length} tasks',
-              style: _px(5, cSage, height: 2)),
-        ),
-      ]),
-    );
-  }
-
-  /// Back of the receipt: the task list and progress.
-  Widget _buildTaskSide({Key? key}) {
-    final total = _tasks.length;
+  /// The headline, the plan switcher (only when there is a Plan B), the task
+  /// list for the selected plan, and progress.
+  Widget _buildTaskSide() {
+    final tasks = _planTasks;
+    final total = tasks.length;
     final done  = _doneCount;
 
-    return Column(key: key, children: [
-      if (_hasBriefing) ...[
+    return Column(children: [
+      if (_headline != null) ...[
         Align(
           alignment: Alignment.centerLeft,
-          child: GestureDetector(
-            behavior: HitTestBehavior.opaque,
-            onTap: _flip,
-            child: Padding(
-              padding: const EdgeInsets.only(bottom: 10),
-              child: Text('<  briefing', style: _px(5, cSage, height: 2)),
-            ),
-          ),
+          child: Text(_headline!, style: _px(6, cInk, height: 2)),
         ),
+        const SizedBox(height: 12),
+        _dashedDivider(),
+        const SizedBox(height: 12),
       ],
-                // Tasks
-                if (_tasks.isEmpty)
-                  Padding(
-                    padding: const EdgeInsets.symmetric(vertical: 16),
-                    child: Text(
-                      'no tasks found!\nenjoy the free time ✦',
-                      textAlign: TextAlign.center,
-                      style: GoogleFonts.pressStart2p(
-                          fontSize: 6, color: cInkLight, height: 2),
-                    ),
-                  )
-                else
-                  Column(
-                    children: _tasks.map((t) => _TaskRow(
-                      task: t,
-                      onToggle: () => _toggleTask(t),
-                      onDelete: () => _deleteTask(t),
-                    )).toList(),
-                  ),
+      if (_hasPlanB) ...[
+        Row(children: [_planChip('A'), _planChip('B')]),
+        const SizedBox(height: 12),
+      ],
+      // Tasks
+      if (tasks.isEmpty)
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          child: Text(
+            _hasPlanB ? 'nothing in plan $_plan' : 'no tasks found!\nenjoy the free time ✦',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.pressStart2p(
+                fontSize: 6, color: cInkLight, height: 2),
+          ),
+        )
+      else
+        Column(
+          children: tasks.map((t) => _TaskRow(
+            task: t,
+            onToggle: () => _toggleTask(t),
+            onDelete: () => _deleteTask(t),
+          )).toList(),
+        ),
 
-                const SizedBox(height: 16),
-                _dashedDivider(),
-                Padding(
-                  padding: const EdgeInsets.symmetric(vertical: 8),
-                  child: Text('🌿 ✦ 🍂',
-                      textAlign: TextAlign.center,
-                      style: GoogleFonts.pressStart2p(
-                          fontSize: 8, letterSpacing: 4,
-                          color: cPaperShadow)),
+      const SizedBox(height: 16),
+      _dashedDivider(),
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 8),
+        child: Text('🌿 ✦ 🍂',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.pressStart2p(
+                fontSize: 8, letterSpacing: 4,
+                color: cPaperShadow)),
+      ),
+      _dashedDivider(),
+      const SizedBox(height: 14),
+
+      // Progress
+      if (tasks.isNotEmpty) ...[
+        Row(mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+          Text('PROGRESS',
+              style: GoogleFonts.pressStart2p(
+                  fontSize: 5, color: cInkLight, letterSpacing: 0.5)),
+          Text('$done / $total',
+              style: GoogleFonts.pressStart2p(
+                  fontSize: 5, color: cInkLight)),
+        ]),
+        const SizedBox(height: 6),
+        Row(
+          children: List.generate(total, (i) => Expanded(
+            child: Container(
+              height: 10,
+              margin: const EdgeInsets.only(right: 3),
+              decoration: BoxDecoration(
+                color: i < done ? cSage : cPaperShadow,
+                border: Border.all(
+                  color: i < done
+                      ? const Color(0xFF6a9060) : cBgDark,
+                  width: 1,
                 ),
-                _dashedDivider(),
-                const SizedBox(height: 14),
-
-                // Progress
-                if (_tasks.isNotEmpty) ...[
-                  Row(mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                      children: [
-                    Text('PROGRESS',
-                        style: GoogleFonts.pressStart2p(
-                            fontSize: 5, color: cInkLight, letterSpacing: 0.5)),
-                    Text('$done / $total',
-                        style: GoogleFonts.pressStart2p(
-                            fontSize: 5, color: cInkLight)),
-                  ]),
-                  const SizedBox(height: 6),
-                  Row(
-                    children: List.generate(total, (i) => Expanded(
-                      child: Container(
-                        height: 10,
-                        margin: const EdgeInsets.only(right: 3),
-                        decoration: BoxDecoration(
-                          color: i < done ? cSage : cPaperShadow,
-                          border: Border.all(
-                            color: i < done
-                                ? const Color(0xFF6a9060) : cBgDark,
-                            width: 1,
-                          ),
-                        ),
-                      ),
-                    )),
-                  ),
-                  if (_progressMessage.isNotEmpty) ...[
-                    const SizedBox(height: 8),
-                    Center(child: Text(_progressMessage,
-                        style: GoogleFonts.pressStart2p(
-                            fontSize: 5, color: cSage))),
-                  ],
-                ],
+              ),
+            ),
+          )),
+        ),
+        if (_progressMessage.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          Center(child: Text(_progressMessage,
+              style: GoogleFonts.pressStart2p(
+                  fontSize: 5, color: cSage))),
+        ],
+      ],
     ]);
   }
 
-  /// Opens a non-briefing section (next PCB work, at school, ...).
+  // ── Checklists inside info sections ("[ ] item" lines) ───────────────────
+
+  String get _todayKey {
+    final n = DateTime.now();
+    return '${n.year}-${n.month}-${n.day}';
+  }
+
+  /// Ticks live on this phone and reset each day.
+  Future<void> _loadTicks() async {
+    final prefs = await SharedPreferences.getInstance();
+    final raw = prefs.getString('info_ticks');
+    if (raw == null) return;
+    try {
+      final m = jsonDecode(raw) as Map<String, dynamic>;
+      if (m['date'] == _todayKey) _ticks = Set<String>.from(m['keys'] as List);
+    } catch (_) {
+      // ignore a malformed save
+    }
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _toggleTick(String key) async {
+    HapticFeedback.selectionClick();
+    setState(() {
+      if (!_ticks.remove(key)) _ticks.add(key);
+    });
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(
+        'info_ticks', jsonEncode({'date': _todayKey, 'keys': _ticks.toList()}));
+  }
+
+  /// "2/4" for a section that has checklist items, else null.
+  String? _checkProgress(InfoSection s) {
+    final items = _checkItems(s.body);
+    if (items.isEmpty) return null;
+    final done = items.where((i) => _ticks.contains('${s.title}|$i')).length;
+    return '$done/${items.length}';
+  }
+
+  /// Opens one info section (warnings, pre-start, next PCB work, ...).
   Future<void> _showSection(InfoSection section) {
     HapticFeedback.selectionClick();
     return showDialog<void>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: cPaper,
-        shape: const RoundedRectangleBorder(
-            side: BorderSide(color: cInk, width: 2)),
-        title: Text(section.title, style: _px(8, cInk)),
-        content: SingleChildScrollView(child: _InfoBody(section.body)),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(ctx),
-            child: Text('CLOSE', style: _px(6, cInk)),
+      builder: (ctx) => StatefulBuilder(
+        builder: (ctx, setDialog) => AlertDialog(
+          backgroundColor: cPaper,
+          shape: const RoundedRectangleBorder(
+              side: BorderSide(color: cInk, width: 2)),
+          title: Text(section.title, style: _px(8, cInk)),
+          content: SingleChildScrollView(
+            child: _InfoBody(
+              section.body,
+              section: section.title,
+              ticks: _ticks,
+              onTick: (key) async {
+                await _toggleTick(key);
+                setDialog(() {});
+              },
+            ),
           ),
-        ],
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.pop(ctx),
+              child: Text('CLOSE', style: _px(6, cInk)),
+            ),
+          ],
+        ),
       ),
     );
   }
 
   Widget _sectionButtons() {
-    final buttons = _buttonSections;
-    if (!_printed || buttons.isEmpty) return const SizedBox.shrink();
+    if (!_printed || _sections.isEmpty) return const SizedBox.shrink();
     return Padding(
       padding: const EdgeInsets.only(bottom: 10),
       child: Wrap(
@@ -707,20 +786,22 @@ class _PlannerScreenState extends State<PlannerScreen>
         spacing: 6,
         runSpacing: 6,
         children: [
-          for (final section in buttons)
+          for (final section in _sections)
             GestureDetector(
               onTap: () => _showSection(section),
               child: Container(
-                constraints: const BoxConstraints(maxWidth: 150),
+                constraints: const BoxConstraints(maxWidth: 170),
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 6),
                 decoration: BoxDecoration(
                   color: cPaper,
                   border: Border.all(color: cInk, width: 2),
                 ),
-                child: Text(section.title.toUpperCase(),
-                    maxLines: 1,
+                child: Text(
+                    '${_checkProgress(section) == null ? '' : '${_checkProgress(section)} '}'
+                    '${section.title.toUpperCase()}',
+                    maxLines: 2,
                     overflow: TextOverflow.ellipsis,
-                    style: _px(5, cInk, letterSpacing: 0.5, height: 1.2)),
+                    style: _px(5, cInk, letterSpacing: 0.5, height: 1.4)),
               ),
             ),
         ],
