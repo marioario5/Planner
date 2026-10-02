@@ -10,6 +10,23 @@ export function todayIn(timeZone: string, now: Date = new Date()): string {
   }).format(now);
 }
 
+/** The date `days` days after (or before, if negative) a YYYY-MM-DD date. */
+export function shiftDate(date: string, days: number): string {
+  const d = new Date(`${date}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+/** "HH:MM" (24-hour) of an ISO timestamp in the given IANA time zone. */
+export function localTime(iso: string, timeZone: string): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone,
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(new Date(iso));
+}
+
 /** Validates an optional `date` input; falls back to today in the planner time zone. */
 export function resolveDate(value: unknown, timeZone: string, now?: Date): string {
   if (value === undefined || value === null || value === '') {

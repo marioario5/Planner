@@ -23,6 +23,14 @@ export class MemoryTaskStore implements TaskStore {
       });
   }
 
+  async listRange(from: string, to: string): Promise<Task[]> {
+    const dates = [...new Set(this.tasks.map((t) => t.date))]
+      .filter((d) => d >= from && d <= to)
+      .sort();
+    const days = await Promise.all(dates.map((d) => this.list(d)));
+    return days.flat();
+  }
+
   async add(date: string, task: NewTask): Promise<Task> {
     const position = this.tasks.filter((t) => t.date === date).length;
     return this.insert(date, task, position, false);

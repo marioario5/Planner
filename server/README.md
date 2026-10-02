@@ -16,7 +16,8 @@ Claude routine ──MCP──▶  Worker + D1  ◀──REST──  Flutter app
 | --- | --- |
 | `set_daily_plan` | Replace a day's list with `tasks: [{title, tag?, start?, minutes?, notes?}]`. Re-publishing keeps tasks checked off if the title matches. |
 | `set_day_info` | Replace the day's headline and info sections: `headline?`, `sections: [{title, body, front?}]`. Call with nothing to clear. |
-| `list_tasks` | The day's tasks with ids and `done` flags. |
+| `list_tasks` | The day's tasks with ids, `done` flags and the local time each was checked off (`completed`). |
+| `get_history` | The last `days` (default 7, max 31) ending at `through` (default today): each day's tasks with done / missed and check-off times. How the routine sees what slipped. |
 | `add_task` | Append one task. |
 | `update_task` | Change title / tag / time / notes, or set `done`. Pass `null` to clear `start`, `minutes` or `notes`. |
 | `delete_task` | Remove a task. |

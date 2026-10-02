@@ -55,6 +55,17 @@ export class D1TaskStore implements TaskStore {
     return results.map(toTask);
   }
 
+  async listRange(from: string, to: string): Promise<Task[]> {
+    const { results } = await this.db
+      .prepare(
+        `SELECT * FROM tasks WHERE date >= ? AND date <= ?
+         ORDER BY date, start_time IS NULL, start_time, position, created_at`,
+      )
+      .bind(from, to)
+      .all<Row>();
+    return results.map(toTask);
+  }
+
   async add(date: string, task: NewTask): Promise<Task> {
     const id = newId();
     await this.db

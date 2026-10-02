@@ -2,7 +2,7 @@
 // Stateless is enough here: every tool is a self-contained read or write, so there's
 // no session to track and each POST can be answered on its own.
 
-import { resolveDate } from './dates';
+import { localTime, resolveDate, shiftDate } from './dates';
 import {
   TAGS,
   ValidationError,
@@ -129,6 +129,30 @@ const TOOLS = [
     annotations: { readOnlyHint: true },
   },
   {
+    name: 'get_history',
+    description:
+      'What was planned and what he actually checked off over the last several days, oldest first. ' +
+      'Each day lists its tasks with done true/false and the local time (HH:MM) each was checked off. ' +
+      'Days with no tasks are left out. Use it to see what slipped and what to carry forward. ' +
+      'A task not checked off may still have been done: he has to tick it in the app.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        days: {
+          type: 'integer',
+          minimum: 1,
+          maximum: 31,
+          description: 'How many days to look at, counting back from `through`. Default 7.',
+        },
+        through: {
+          ...dateProp,
+          description: 'Last day to include, YYYY-MM-DD. Defaults to today in the planner time zone.',
+        },
+      },
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
     name: 'add_task',
     description: "Append one task to the end of a day's list.",
     inputSchema: {
@@ -181,7 +205,7 @@ export interface McpContext {
 
 type Json = Record<string, unknown>;
 
-const view = (t: Task) => ({
+const view = (t: Task, timeZone: string) => ({
   id: t.id,
   title: t.title,
   tag: t.tag,
@@ -189,15 +213,59 @@ const view = (t: Task) => ({
   minutes: t.minutes,
   notes: t.notes,
   done: t.done,
+  // Local HH:MM he checked it off; null while it's not done.
+  completed: t.done && t.completedAt ? localTime(t.completedAt, timeZone) : null,
 });
 
-function summarize(date: string, tasks: Task[]): Json {
+function summarize(date: string, tasks: Task[], timeZone: string): Json {
   return {
     date,
     done: tasks.filter((t) => t.done).length,
     total: tasks.length,
-    tasks: tasks.map(view),
+    tasks: tasks.map((t) => view(t, timeZone)),
   };
+}
+
+function parseDays(value: unknown): number {
+  if (value === undefined || value === null) return 7;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 31) {
+    throw new ValidationError('days must be a whole number from 1 to 31');
+  }
+  return value;
+}
+
+async function history(args: Json, ctx: McpContext): Promise<Json> {
+  const { store, timeZone, now } = ctx;
+  const through = resolveDate(args.through, timeZone, now);
+  const days = parseDays(args.days);
+  const from = shiftDate(through, -(days - 1));
+
+  const byDate = new Map<string, Task[]>();
+  for (const t of await store.listRange(from, through)) {
+    byDate.set(t.date, [...(byDate.get(t.date) ?? []), t]);
+  }
+
+  let done = 0;
+  let total = 0;
+  const out = [...byDate.entries()].map(([date, tasks]) => {
+    const dayDone = tasks.filter((t) => t.done).length;
+    done += dayDone;
+    total += tasks.length;
+    return {
+      date,
+      done: dayDone,
+      total: tasks.length,
+      tasks: tasks.map((t) => ({
+        title: t.title,
+        tag: t.tag,
+        start: t.start,
+        minutes: t.minutes,
+        done: t.done,
+        completed: t.done && t.completedAt ? localTime(t.completedAt, timeZone) : null,
+      })),
+    };
+  });
+  return { from, through, done, total, days: out };
 }
 
 async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json> {
@@ -206,7 +274,7 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
     case 'set_daily_plan': {
       const date = resolveDate(args.date, timeZone, now);
       const tasks = await store.replaceDay(date, parseNewTasks(args.tasks));
-      return summarize(date, tasks);
+      return summarize(date, tasks, timeZone);
     }
     case 'set_day_info': {
       const date = resolveDate(args.date, timeZone, now);
@@ -220,18 +288,20 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
     }
     case 'list_tasks': {
       const date = resolveDate(args.date, timeZone, now);
-      return summarize(date, await store.list(date));
+      return summarize(date, await store.list(date), timeZone);
     }
+    case 'get_history':
+      return history(args, ctx);
     case 'add_task': {
       const date = resolveDate(args.date, timeZone, now);
-      return { added: view(await store.add(date, parseNewTask(args))), date };
+      return { added: view(await store.add(date, parseNewTask(args)), timeZone), date };
     }
     case 'update_task': {
       const id = parseId(args.id);
       const { id: _id, ...rest } = args;
       const task = await store.update(id, parsePatch(rest));
       if (!task) throw new ValidationError(`no task with id ${id}`);
-      return { updated: view(task) };
+      return { updated: view(task, timeZone) };
     }
     case 'delete_task': {
       const id = parseId(args.id);

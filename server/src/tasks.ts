@@ -53,6 +53,8 @@ export interface DayInfo {
 export interface TaskStore {
   /** Timed tasks in clock order, then untimed tasks in the order they were given. */
   list(date: string): Promise<Task[]>;
+  /** Tasks from `from` through `to` inclusive, ordered by date then like `list`. */
+  listRange(from: string, to: string): Promise<Task[]>;
   add(date: string, task: NewTask): Promise<Task>;
   /** Replaces a day's list. Tasks whose title matches one already done stay done. */
   replaceDay(date: string, tasks: NewTask[]): Promise<Task[]>;

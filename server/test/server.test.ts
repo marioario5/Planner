@@ -98,12 +98,13 @@ describe('mcp protocol', () => {
     expect(await res.text()).toBe('');
   });
 
-  it('lists the six tools with schemas', async () => {
+  it('lists the seven tools with schemas', async () => {
     const { body } = await rpc('tools/list');
     expect(body.result.tools.map((t: any) => t.name)).toEqual([
       'set_daily_plan',
       'set_day_info',
       'list_tasks',
+      'get_history',
       'add_task',
       'update_task',
       'delete_task',
@@ -302,6 +303,65 @@ describe('times and notes', () => {
     expect(((await patch.json()) as any).start).toBe('16:00');
     const bad = await call(`/api/tasks/${data.tasks[0].id}`, { method: 'PATCH', body: JSON.stringify({ start: 'noon' }) });
     expect(bad.status).toBe(400);
+  });
+});
+
+describe('history', () => {
+  async function plan(date: string, titles: string[], doneTitles: string[] = []) {
+    const { data } = await tool('set_daily_plan', {
+      date,
+      tasks: titles.map((title, i) => ({ title, tag: 'sat', start: `1${5 + i}:00`, minutes: 30 })),
+    });
+    for (const t of data.tasks) {
+      if (doneTitles.includes(t.title)) await tool('update_task', { id: t.id, done: true });
+    }
+  }
+
+  beforeEach(async () => {
+    await plan('2026-09-28', ['Mon A', 'Mon B'], ['Mon A', 'Mon B']);
+    await plan('2026-09-30', ['Wed A', 'Wed B', 'Wed C'], ['Wed A']);
+    await plan('2026-10-01', ['Thu A'], []);
+    await plan('2026-10-05', ['Future A'], []); // after "today": never shown
+  });
+
+  it('shows what was done and missed, oldest first, skipping empty days', async () => {
+    const { data } = await tool('get_history', {});
+    expect(data).toMatchObject({ from: '2026-09-25', through: '2026-10-01', done: 3, total: 6 });
+    expect(data.days.map((d: any) => [d.date, d.done, d.total])).toEqual([
+      ['2026-09-28', 2, 2],
+      ['2026-09-30', 1, 3],
+      ['2026-10-01', 0, 1],
+    ]);
+    const wed = data.days[1].tasks;
+    expect(wed.map((t: any) => [t.title, t.done])).toEqual([['Wed A', true], ['Wed B', false], ['Wed C', false]]);
+    expect(wed[0].completed).toMatch(/^\d{2}:\d{2}$/);
+    expect(wed[1].completed).toBeNull();
+    expect(wed[0]).toMatchObject({ tag: 'sat', start: '15:00', minutes: 30 });
+    expect(JSON.stringify(data)).not.toContain('Future A');
+  });
+
+  it('honours days and through', async () => {
+    const two = await tool('get_history', { days: 2 });
+    expect(two.data.days.map((d: any) => d.date)).toEqual(['2026-09-30', '2026-10-01']);
+    expect(two.data.from).toBe('2026-09-30');
+
+    const later = await tool('get_history', { days: 3, through: '2026-10-05' });
+    expect(later.data.days.map((d: any) => d.date)).toEqual(['2026-10-05']);
+    const none = await tool('get_history', { days: 1, through: '2026-09-29' });
+    expect(none.data).toMatchObject({ done: 0, total: 0, days: [] });
+  });
+
+  it('rejects bad arguments as tool errors', async () => {
+    for (const args of [{ days: 0 }, { days: 32 }, { days: 1.5 }, { days: '7' }, { through: 'yesterday' }, { through: '2026-02-31' }]) {
+      expect((await tool('get_history', args)).isError).toBe(true);
+    }
+  });
+
+  it('puts the check-off time on list_tasks too', async () => {
+    const day = await tool('list_tasks', { date: '2026-09-28' });
+    expect(day.data.tasks[0].completed).toMatch(/^\d{2}:\d{2}$/);
+    const undone = await tool('list_tasks', { date: '2026-10-01' });
+    expect(undone.data.tasks[0].completed).toBeNull();
   });
 });
 
