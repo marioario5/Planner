@@ -4,6 +4,7 @@
 
 import { localTime, resolveDate, shiftDate } from './dates';
 import { DEFAULT_PREFIXES, isSyncable, reconcile, type SyncConfig } from './sync';
+import { completedAtLocal, dayTiming, lateMinutes } from './timing';
 import {
   PLANS,
   TAGS,
@@ -144,7 +145,8 @@ const TOOLS = [
     name: 'list_tasks',
     description:
       'List one plan\'s tasks for a day (Plan A unless you pass plan) with their ids and whether each is done. ' +
-      '`plans` shows which plans exist for the day and how many tasks are done in each.',
+      '`plans` shows which plans exist for the day and how many tasks are done in each. ' +
+      'Done tasks carry `completed_at` and `late_min`, and the plan carries a `timing` summary (see get_history).',
     inputSchema: { type: 'object', properties: { date: dateProp, plan: planProp } },
     annotations: { readOnlyHint: true },
   },
@@ -152,7 +154,10 @@ const TOOLS = [
     name: 'get_history',
     description:
       'What was planned and what he actually checked off over the last several days, oldest first. ' +
-      'Each day lists its tasks with done true/false and the local time (HH:MM) each was checked off. ' +
+      'Each day lists its tasks with done true/false, when each was checked off (`completed_at`, local) and `late_min` ' +
+      '(minutes after its planned end he ticked it; negative = early), plus a `timing` summary: first and last check-off, ' +
+      'average and worst lateness, which tasks were done out of order, and `ticked_in_bulk` (3+ ticks within 10 minutes, ' +
+      'meaning the times show when he ticked, not when he worked, so do not read lateness from them). ' +
       'If a day had both Plan A and Plan B, the day shows the one he followed (the plan with more tasks checked off, A on a tie) ' +
       'and `other_plan` gives the other one\'s totals. ' +
       'Days with no tasks are left out. Use it to see what slipped and what to carry forward. ' +
@@ -244,14 +249,20 @@ const view = (t: Task, timeZone: string) => ({
   done: t.done,
   // Local HH:MM he checked it off; null while it's not done.
   completed: t.done && t.completedAt ? localTime(t.completedAt, timeZone) : null,
+  // Same moment with its date ("2026-10-02 00:30"), so a tick after midnight isn't ambiguous.
+  completed_at: completedAtLocal(t, timeZone),
+  // Minutes after its planned end (start + minutes) that he ticked it; negative = early.
+  late_min: lateMinutes(t, timeZone),
 });
 
 function summarize(date: string, plan: Plan, tasks: Task[], timeZone: string): Json {
+  const timing = dayTiming(tasks, timeZone);
   return {
     date,
     plan,
     done: tasks.filter((t) => t.done).length,
     total: tasks.length,
+    ...(timing ? { timing } : {}),
     tasks: tasks.map((t) => view(t, timeZone)),
   };
 }
@@ -307,12 +318,14 @@ async function history(args: Json, ctx: McpContext): Promise<Json> {
     const tasks = dayTasks.filter((t) => t.plan === followed.plan);
     done += followed.done;
     total += followed.total;
+    const timing = dayTiming(tasks, timeZone);
     return {
       date,
       plan: followed.plan,
       done: followed.done,
       total: followed.total,
       ...(other ? { other_plan: other } : {}),
+      ...(timing ? { timing } : {}),
       tasks: tasks.map((t) => ({
         title: t.title,
         tag: t.tag,
@@ -320,6 +333,8 @@ async function history(args: Json, ctx: McpContext): Promise<Json> {
         minutes: t.minutes,
         done: t.done,
         completed: t.done && t.completedAt ? localTime(t.completedAt, timeZone) : null,
+        completed_at: completedAtLocal(t, timeZone),
+        late_min: lateMinutes(t, timeZone),
       })),
     };
   });

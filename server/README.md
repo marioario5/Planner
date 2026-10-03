@@ -16,8 +16,8 @@ Claude routine ──MCP──▶  Worker + D1  ◀──REST──  Flutter app
 | --- | --- |
 | `set_daily_plan` | Replace one plan's list for a day: `plan?` (`A` default, or `B`) and `tasks: [{title, tag?, start?, minutes?, notes?, siteKey?}]`. Re-publishing keeps tasks checked off if the title matches. |
 | `set_day_info` | Replace the day's headline and info sections: `headline?`, `sections: [{title, body}]`. Call with nothing to clear. |
-| `list_tasks` | One plan's tasks (A unless `plan` is given) with ids, `done` flags and check-off times (`completed`), plus `plans` showing which plans exist. |
-| `get_history` | The last `days` (default 7, max 31) ending at `through` (default today): each day's tasks with done / missed and check-off times, for the plan he followed (the one with more check-offs, A on a tie) plus `other_plan` totals. How the routine sees what slipped. |
+| `list_tasks` | One plan's tasks (A unless `plan` is given) with ids, `done` flags and check-off times (`completed`), plus `plans` showing which plans exist. Done tasks also carry `completed_at` and `late_min`, and the plan a `timing` summary (see below). |
+| `get_history` | The last `days` (default 7, max 31) ending at `through` (default today): each day's tasks with done / missed and check-off times, for the plan he followed (the one with more check-offs, A on a tie) plus `other_plan` totals, with the same per-task fields and `timing` summary. How the routine sees what slipped. |
 | `add_task` | Append one task to a plan (`plan?`, A by default). |
 | `update_task` | Change title / tag / time / notes, or set `done`. Pass `null` to clear `start`, `minutes` or `notes`. |
 | `delete_task` | Remove a task. |
@@ -28,6 +28,18 @@ Each task can carry a time and detail, so titles stay short:
 - `start`: 24-hour `HH:MM` (e.g. `15:30`). Timed tasks are shown in clock order; untimed ones come last, in the order given.
 - `minutes`: planned length, shown next to the time (`3:30pm · 25m`).
 - `notes`: detail behind a "+ how to start" tap in the app (start move, if-then cue, method, break).
+
+### How the day actually ran
+
+Every check-off is timestamped, and `list_tasks` / `get_history` turn that into facts Claude can use:
+
+- per task: `completed_at` (local, with the date, so a tick after midnight is clear) and `late_min`, the minutes after
+  the block's planned end (start + minutes) it was ticked, negative if early. Only for tasks that have both a start and a length.
+- per day, under `timing`: `first_done`, `last_done`, `avg_late_min`, `max_late_min`, `out_of_order` (blocks done in a
+  different order than planned, with planned and actual positions) and `ticked_in_bulk`.
+
+`ticked_in_bulk` is true when 3 or more tasks were checked off within 10 minutes. The time then says when he ticked,
+not when he did the work, so it should not be read as "behind". Each plan is measured against its own times.
 
 ### Plan A and Plan B
 

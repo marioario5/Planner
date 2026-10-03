@@ -365,6 +365,118 @@ describe('history', () => {
   });
 });
 
+describe('check-off timing', () => {
+  // 2026-10-01 is PDT (UTC-7): local h:m on that day (+ dayOffset) as epoch ms.
+  const at = (h: number, m: number, dayOffset = 0) => Date.UTC(2026, 9, 1 + dayOffset, h + 7, m);
+  const plan = (tasks: object[]) => tool('set_daily_plan', { tasks });
+  const tick = async (id: string, ms: number) => {
+    store.clock = () => ms;
+    await tool('update_task', { id, done: true });
+  };
+  const hist = async () => (await tool('get_history', { days: 1 })).data.days[0];
+
+  const threeBlocks = () =>
+    plan([
+      { title: 'A', start: '15:30', minutes: 25 }, // ends 15:55
+      { title: 'B', start: '16:00', minutes: 30 }, // ends 16:30
+      { title: 'C', start: '17:00', minutes: 20 }, // ends 17:20
+    ]);
+
+  it('reports lateness per task and a day summary, flagging out-of-order work', async () => {
+    const { data } = await threeBlocks();
+    const id = (t: string) => data.tasks.find((x: any) => x.title === t).id;
+    await tick(id('B'), at(16, 50)); // 20 min after B's planned end
+    await tick(id('A'), at(17, 10)); // 75 min after A's planned end, and after B
+
+    const day = await hist();
+    const byTitle = Object.fromEntries(day.tasks.map((t: any) => [t.title, t]));
+    expect(byTitle.B).toMatchObject({ completed: '16:50', completed_at: '2026-10-01 16:50', late_min: 20 });
+    expect(byTitle.A).toMatchObject({ completed: '17:10', completed_at: '2026-10-01 17:10', late_min: 75 });
+    expect(byTitle.C).toMatchObject({ completed: null, completed_at: null, late_min: null });
+    expect(day.timing).toEqual({
+      first_done: '16:50',
+      last_done: '17:10',
+      avg_late_min: 48, // (20 + 75) / 2, rounded
+      max_late_min: 75,
+      out_of_order: [
+        { title: 'A', planned_position: 1, done_position: 2 },
+        { title: 'B', planned_position: 2, done_position: 1 },
+      ],
+      ticked_in_bulk: false,
+    });
+
+    // list_tasks carries the same facts for the plan
+    const list = (await tool('list_tasks', {})).data;
+    expect(list.timing).toEqual(day.timing);
+    expect(list.tasks.find((t: any) => t.title === 'A')).toMatchObject({ completed_at: '2026-10-01 17:10', late_min: 75 });
+  });
+
+  it('shows early check-offs as negative and in-order work as clean', async () => {
+    const { data } = await threeBlocks();
+    await tick(data.tasks[0].id, at(15, 45)); // 10 min before A's planned end
+    await tick(data.tasks[1].id, at(16, 30)); // exactly on time
+    const day = await hist();
+    expect(day.tasks.map((t: any) => t.late_min)).toEqual([-10, 0, null]);
+    expect(day.timing).toMatchObject({ avg_late_min: -5, max_late_min: 0, out_of_order: [], ticked_in_bulk: false });
+  });
+
+  it('keeps a tick after midnight tied to the plan day', async () => {
+    const { data } = await plan([{ title: 'Late night', start: '22:00', minutes: 30 }]);
+    await tick(data.tasks[0].id, at(0, 30, 1)); // 00:30 the next morning
+    const t = (await hist()).tasks[0];
+    expect(t).toMatchObject({ completed: '00:30', completed_at: '2026-10-02 00:30', late_min: 120 });
+  });
+
+  it('flags bulk ticking: 3+ check-offs within 10 minutes', async () => {
+    const { data } = await plan([{ title: 'A' }, { title: 'B' }, { title: 'C' }, { title: 'D' }]);
+    const ids = data.tasks.map((t: any) => t.id);
+    await tick(ids[0], at(22, 0));
+    await tick(ids[1], at(22, 3));
+    expect((await hist()).timing.ticked_in_bulk).toBe(false); // two is not a batch
+    await tick(ids[2], at(22, 6));
+    expect((await hist()).timing.ticked_in_bulk).toBe(true);
+  });
+
+  it('does not call spread-out ticks a batch', async () => {
+    const { data } = await plan([{ title: 'A' }, { title: 'B' }, { title: 'C' }]);
+    await tick(data.tasks[0].id, at(16, 0));
+    await tick(data.tasks[1].id, at(16, 30));
+    await tick(data.tasks[2].id, at(17, 0));
+    expect((await hist()).timing.ticked_in_bulk).toBe(false);
+  });
+
+  it('has no lateness for tasks without a start and length, but still gives the order and span', async () => {
+    const { data } = await plan([{ title: 'Untimed' }, { title: 'No length', start: '16:00' }]);
+    await tick(data.tasks[1].id, at(16, 40));
+    const day = await hist();
+    expect(day.tasks.map((t: any) => t.late_min)).toEqual([null, null]);
+    expect(day.timing).toMatchObject({ first_done: '16:40', last_done: '16:40', avg_late_min: null, max_late_min: null });
+  });
+
+  it('leaves timing out until something is done, and clears it when unticked', async () => {
+    const { data } = await threeBlocks();
+    expect((await hist()).timing).toBeUndefined();
+    expect((await tool('list_tasks', {})).data.timing).toBeUndefined();
+    await tick(data.tasks[0].id, at(16, 0));
+    expect((await hist()).timing).toBeDefined();
+    await tool('update_task', { id: data.tasks[0].id, done: false });
+    const day = await hist();
+    expect(day.timing).toBeUndefined();
+    expect(day.tasks[0]).toMatchObject({ completed_at: null, late_min: null });
+  });
+
+  it('measures each plan separately', async () => {
+    const a = await tool('set_daily_plan', { plan: 'A', tasks: [{ title: 'A1', start: '15:30', minutes: 20 }] });
+    const b = await tool('set_daily_plan', { plan: 'B', tasks: [{ title: 'B1', start: '16:30', minutes: 20 }] });
+    await tick(b.data.tasks[0].id, at(17, 0)); // 10 min late against B's own times
+    const day = await hist();
+    expect(day).toMatchObject({ plan: 'B' });
+    expect(day.tasks[0].late_min).toBe(10);
+    expect((await tool('list_tasks', { plan: 'A' })).data.timing).toBeUndefined();
+    expect(a.data.plan).toBe('A');
+  });
+});
+
 describe('day info (headline + sections)', () => {
   const sections = [
     { title: 'Warnings', body: '- SAT date mismatch\n- Dr Dish still blocked', front: true },
