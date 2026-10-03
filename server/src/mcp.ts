@@ -37,7 +37,9 @@ const TAG_HELP =
 const dateProp = {
   type: 'string',
   pattern: '^\\d{4}-\\d{2}-\\d{2}$',
-  description: 'Planner day as YYYY-MM-DD. Defaults to today in the planner time zone.',
+  description:
+    'Planner day as YYYY-MM-DD. Defaults to today in the planner time zone. A day runs from 4:00am to 4:00am, ' +
+    'so 12:30am still belongs to the day that is ending.',
 };
 const tagProp = { type: 'string', enum: [...TAGS], description: TAG_HELP };
 const titleProp = {

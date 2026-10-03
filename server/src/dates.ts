@@ -10,6 +10,17 @@ export function todayIn(timeZone: string, now: Date = new Date()): string {
   }).format(now);
 }
 
+/**
+ * The planner's day starts at 04:00, not midnight, because he works past midnight:
+ * a task ticked at 00:30 still belongs to the day that's ending. The app uses the same hour.
+ */
+export const DAY_START_HOUR = 4;
+
+/** The planner day (YYYY-MM-DD) that `now` falls in, in the given IANA time zone. */
+export function plannerToday(timeZone: string, now: Date = new Date()): string {
+  return todayIn(timeZone, new Date(now.getTime() - DAY_START_HOUR * 3_600_000));
+}
+
 /** The date `days` days after (or before, if negative) a YYYY-MM-DD date. */
 export function shiftDate(date: string, days: number): string {
   const d = new Date(`${date}T00:00:00Z`);
@@ -27,10 +38,10 @@ export function localTime(iso: string, timeZone: string): string {
   }).format(new Date(iso));
 }
 
-/** Validates an optional `date` input; falls back to today in the planner time zone. */
+/** Validates an optional `date` input; falls back to the current planner day (rolls over at 04:00). */
 export function resolveDate(value: unknown, timeZone: string, now?: Date): string {
   if (value === undefined || value === null || value === '') {
-    return todayIn(timeZone, now);
+    return plannerToday(timeZone, now);
   }
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
     throw new ValidationError('date must look like YYYY-MM-DD');

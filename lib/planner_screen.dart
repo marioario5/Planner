@@ -218,7 +218,7 @@ class _PlannerScreenState extends State<PlannerScreen>
   String get _dateLabel {
     final days   = ['Sunday','Monday','Tuesday','Wednesday','Thursday','Friday','Saturday'];
     final months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-    final now    = DateTime.now();
+    final now    = plannerDay();
     return '${days[now.weekday % 7]}, ${months[now.month - 1]} ${now.day}';
   }
 
@@ -708,7 +708,7 @@ class _PlannerScreenState extends State<PlannerScreen>
   // ── Checklists inside info sections ("[ ] item" lines) ───────────────────
 
   String get _todayKey {
-    final n = DateTime.now();
+    final n = plannerDay();
     return '${n.year}-${n.month}-${n.day}';
   }
 

@@ -63,7 +63,7 @@ class TasksService {
       };
 
   static String _today() {
-    final now = DateTime.now();
+    final now = plannerDay();
     final m = now.month.toString().padLeft(2, '0');
     final d = now.day.toString().padLeft(2, '0');
     return '${now.year}-$m-$d';

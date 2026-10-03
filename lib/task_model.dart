@@ -1,5 +1,13 @@
 enum TaskTag { school, calculus3, sat, pcb, photography }
 
+/// The planner's day starts at 4:00am, not midnight, because he works past midnight:
+/// 12:30am still belongs to the day that is ending. The server uses the same hour.
+const int dayStartHour = 4;
+
+/// The moment whose calendar date is the current planner day.
+DateTime plannerDay([DateTime? now]) =>
+    (now ?? DateTime.now()).subtract(const Duration(hours: dayStartHour));
+
 /// "15:30" -> "3:30pm". Returns the input unchanged if it isn't HH:MM.
 String formatClock(String hhmm) {
   final parts = hhmm.split(':');

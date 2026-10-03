@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { todayIn } from '../src/dates';
+import { plannerToday, todayIn } from '../src/dates';
 import { handleRequest } from '../src/index';
 import { MemoryTaskStore } from './memory-store';
 
@@ -41,6 +41,46 @@ describe('dates', () => {
   it('uses the planner time zone, not UTC', () => {
     expect(todayIn('America/Los_Angeles', NOW)).toBe('2026-10-01');
     expect(todayIn('UTC', NOW)).toBe('2026-10-02');
+  });
+});
+
+describe('planner day rolls over at 4am', () => {
+  const tz = 'America/Los_Angeles'; // PDT, UTC-7, on these dates
+  const pdt = (day: number, h: number, m: number) => new Date(Date.UTC(2026, 9, day, h + 7, m));
+
+  it('keeps the small hours on the previous day and flips at 04:00', () => {
+    expect(plannerToday(tz, pdt(1, 23, 59))).toBe('2026-10-01');
+    expect(plannerToday(tz, pdt(2, 0, 0))).toBe('2026-10-01'); // midnight
+    expect(plannerToday(tz, pdt(2, 0, 30))).toBe('2026-10-01');
+    expect(plannerToday(tz, pdt(2, 3, 59))).toBe('2026-10-01');
+    expect(plannerToday(tz, pdt(2, 4, 0))).toBe('2026-10-02');
+    expect(plannerToday(tz, pdt(2, 15, 0))).toBe('2026-10-02'); // the 3pm routine run
+  });
+
+  it('applies to the default date of the MCP tools and the app API', async () => {
+    const at0030 = pdt(2, 0, 30);
+    const send = (path: string, init: RequestInit = {}) =>
+      handleRequest(
+        new Request(BASE + path, { ...init, headers: { Authorization: `Bearer ${TOKEN}`, ...(init.headers as object) } }),
+        env,
+        store,
+        at0030,
+      );
+    const mcp = async (name: string, args: object) => {
+      const res = await send('/mcp', {
+        method: 'POST',
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
+      });
+      return JSON.parse(((await res.json()) as any).result.content[0].text);
+    };
+
+    // At 00:30 on Oct 2, "today" is still Oct 1.
+    expect((await mcp('set_daily_plan', { tasks: [{ title: 'Late night work' }] })).date).toBe('2026-10-01');
+    expect((await mcp('list_tasks', {})).tasks[0].title).toBe('Late night work');
+    expect(((await (await send('/api/tasks')).json()) as any).date).toBe('2026-10-01');
+    expect((await mcp('list_tasks', { date: '2026-10-02' })).total).toBe(0);
+    const history = await mcp('get_history', { days: 1 });
+    expect(history.through).toBe('2026-10-01');
   });
 });
 

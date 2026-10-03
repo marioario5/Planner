@@ -63,6 +63,11 @@ in the app (the button shows progress like `2/4 PRE-START`). Ticks live on the p
 
 `date` is optional everywhere and defaults to today in `PLANNER_TZ` (see `wrangler.toml`).
 
+**A planner day runs from 4:00am to 4:00am, not midnight**, because the work often runs past midnight: a task ticked at
+12:30am still belongs to the day that is ending, and the app keeps showing that day until 4:00am. The server and the app
+use the same hour (`DAY_START_HOUR` in `src/dates.ts`, `dayStartHour` in `lib/task_model.dart`). Dates you pass explicitly
+are always taken as given.
+
 ## Deploy
 
 You need a free Cloudflare account.
