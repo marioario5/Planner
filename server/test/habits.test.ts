@@ -29,6 +29,7 @@ function task(s: Spec): Task {
     id: `t${++seq}`,
     date: s.date,
     plan: s.plan ?? 'A',
+    commitmentId: null,
     title: `task ${seq}`,
     tag: s.tag ?? 'school',
     start: s.start === undefined ? '15:30' : s.start,

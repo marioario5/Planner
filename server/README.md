@@ -20,6 +20,9 @@ Claude routine ──MCP──▶  Worker + D1  ◀──REST──  Flutter app
 | `get_history` | The last `days` (default 7, max 31) ending at `through` (default today): each day's tasks with done / missed and check-off times, for the plan he followed (the one with more check-offs, A on a tie) plus `other_plan` totals, with the same per-task fields and `timing` summary. How the routine sees what slipped. |
 | `get_habits` | How he actually works: statistics computed from his check-offs over the last `days` finished days (default 28, 7 to 90), plus the habit note and its `versions`. Pass `version` to read an older note. |
 | `set_habits` | Save a new version of the habit note (max 6000 characters). The last 10 versions are kept. |
+| `get_framework` | The month-ahead framework: a short list of suggestions from earlier runs (flagged and due-soon items, deferrals, recent choices, and whether a review is due). `all: true` adds every open item. |
+| `set_commitments` | Add or change framework items (max 25 open), close them (`done` / `dropped`), and stamp a light review with `reviewed: true`. |
+| `defer_commitment` | Consciously set an item aside for up to 14 days with a one-line reason (`until: null` brings it back). |
 | `add_task` | Append one task to a plan (`plan?`, A by default). |
 | `update_task` | Change title / tag / time / notes, or set `done`. Pass `null` to clear `start`, `minutes` or `notes`. |
 | `delete_task` | Remove a task. |
@@ -64,6 +67,28 @@ The scheduler learns from when he actually does things. `get_habits` returns two
 
 The planner rules tell Claude when to read the statistics, how to apply them (pad by subject, schedule hard work where he
 really finishes things, move what keeps getting missed), and when it may write the note. There is nothing in the app for it.
+
+### The framework (a rough month ahead)
+
+Every run starts fresh, so something has to carry over, or a big task with a far deadline (the college applications) can
+sit untouched until the last days without anyone choosing that. The framework is a short list of **commitments**: at most
+25 open items, each a slug id, a title, a due date, a rough size in minutes and a short `note` with the proposing agent's
+reasoning. Tasks can link to one with `commitment: "piq-7"`, so the server counts real progress from his check-offs.
+
+**They are suggestions, not instructions.** An earlier run wrote each one with less information than the current run has.
+The current planner is free to follow, resize, split, defer or drop any of them, and to disagree with the whole thing
+(then it edits the framework so the next run inherits its view). Every `get_framework` response opens with a note saying
+so, and so do the tool descriptions. The framework says what might matter, never when.
+
+The server only *observes*, in plain words (`signals`): no work logged yet and due within 35 days (after a 3-day grace),
+behind a steady pace, more than an hour a day needed to finish, stalled for a week, or overdue. Items with a signal
+appear under `worth_a_look`. The one ask is that nothing flagged vanishes **by accident**: it is in today's plan, or it
+was left out on purpose with `defer_commitment` (a reason and a return date within 14 days, logged so the next run sees
+the choice), or it was resized or dropped. `set_daily_plan` reports any flagged item the plan left out as
+`framework_check`; that is a prompt, never an error, and publishing always succeeds.
+
+A light review is asked for about once a week (`review_due`): add what matters in the next ~35 days that is missing,
+close what is finished, then `set_commitments` with `reviewed: true`.
 
 ### Plan A and Plan B
 
@@ -115,6 +140,7 @@ npm run db:info:remote      # 0003: headline + info sections (safe to repeat)
 npm run db:sync:remote      # 0004: site sync columns (run once; errors if already applied)
 npm run db:plans:remote     # 0005: Plan A / Plan B (run once; errors if already applied)
 npm run db:habits:remote    # 0006: habit notes (safe to repeat)
+npm run db:framework:remote # 0007: framework tables + tasks.commitment_id (the ALTER errors if already applied)
 npm run deploy
 ```
 

@@ -3,13 +3,16 @@
 // no session to track and each POST can be answered on its own.
 
 import { localTime, plannerToday, plannerTimeToEpoch, resolveDate, shiftDate } from './dates';
+import { MAX_DEFER_DAYS, MAX_OPEN_COMMITMENTS, computeFramework, unaddressed } from './framework';
 import { DEFAULT_WINDOW_DAYS, MAX_WINDOW_DAYS, computeHabits } from './habits';
 import { DEFAULT_PREFIXES, isSyncable, reconcile, type SyncConfig } from './sync';
 import { completedAtLocal, dayTiming, isBackfilled, lateMinutes } from './timing';
 import {
+  COMMITMENT_STATUSES,
   PLANS,
   TAGS,
   ValidationError,
+  parseCommitmentId,
   parseDayInfo,
   parseHabitNotes,
   parseId,
@@ -18,6 +21,8 @@ import {
   parsePatch,
   parsePlan,
   parseStart,
+  type Commitment,
+  type CommitmentStatus,
   type Plan,
   type Task,
   type TaskStore,
@@ -31,7 +36,9 @@ const INSTRUCTIONS =
   'To publish a day, call set_daily_plan once with the full ordered list. ' +
   'set_day_info publishes the headline and info sections (warnings, pre-start checklist, next PCB work...) that go with the day. ' +
   'list_tasks shows what is on the list and what the user has already checked off. ' +
-  'get_habits returns statistics on how he actually works plus the habit notes you keep with set_habits; read it before planning.';
+  'get_habits returns statistics on how he actually works plus the habit notes you keep with set_habits; read it before planning. ' +
+  'get_framework returns a short list of SUGGESTIONS from earlier planning runs about what might matter over the next month; ' +
+  'you are free to follow, change or ignore them, but do not let a flagged one vanish by accident.';
 
 const TAG_HELP =
   'school = general schoolwork; calculus3 = Calculus 3 (homework, studying, quizzes); ' +
@@ -71,6 +78,13 @@ const planProp = {
     'A = the normal day (default). B = the backup plan, a complete alternative list for the same day ' +
     '(e.g. a later start). Each plan is replaced independently; publishing one never touches the other.',
 };
+const commitmentProp = {
+  type: 'string',
+  pattern: '^[a-z0-9][a-z0-9-]{0,39}$',
+  description:
+    'Optional: id of the framework commitment this task works on (e.g. "piq-7"), so real progress on it can be counted. ' +
+    'It must be an open commitment (see get_framework / set_commitments).',
+};
 const siteKeyProp = {
   type: 'string',
   pattern: '^[A-Za-z0-9_-]{1,80}$',
@@ -105,6 +119,7 @@ const TOOLS = [
               minutes: minutesProp,
               notes: notesProp,
               siteKey: siteKeyProp,
+              commitment: commitmentProp,
             },
             required: ['title'],
           },
@@ -224,6 +239,72 @@ const TOOLS = [
     annotations: { destructiveHint: false, idempotentHint: false },
   },
   {
+    name: 'get_framework',
+    description:
+      'A short list of SUGGESTIONS from earlier planning runs about what might matter over the next month: each has a due date, ' +
+      'a rough size and the earlier agent\'s reasoning. They are forecasts made with less information than you have now. You are free to ' +
+      'follow, resize, split, defer or drop any of them, and to disagree with the whole framework. The server adds plain-language ' +
+      '`signals` when one seems to be slipping (no work logged yet, behind a steady pace, stalled, overdue). `worth_a_look` are the ones ' +
+      'not to lose by accident; `deferred` were set aside on purpose by an earlier run (with the reason); `recent_choices` shows what ' +
+      'earlier runs decided. It says WHAT might matter, never WHEN. Small by design: read it every run.',
+    inputSchema: {
+      type: 'object',
+      properties: { all: { type: 'boolean', description: 'Also include every open item, not just the flagged and due-soon ones.' } },
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'set_commitments',
+    description:
+      `Add or change suggestions in the framework (at most ${MAX_OPEN_COMMITMENTS} open). Keep them rough on purpose: a short slug id, ` +
+      'a title, a due date, a rough size in minutes, and a short `note` with your reasoning and assumptions ("assumed 3 sessions of ~60 min, ' +
+      'outline first") so the next planner can disagree with you intelligently. It says WHAT, never WHEN. Existing ids take partial ' +
+      "updates (null clears due, start, target_minutes or note). Set status to 'done' or 'dropped' to close one. Pass reviewed: true " +
+      'after a light review so it is not asked for again for a week.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        commitments: {
+          type: 'array',
+          maxItems: MAX_OPEN_COMMITMENTS,
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,39}$', description: 'Short slug, e.g. "piq-7".' },
+              title: { type: 'string', minLength: 1, maxLength: 80 },
+              due: { type: ['string', 'null'], pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+              start: { type: ['string', 'null'], pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'When the work could begin; used for the pace signal.' },
+              target_minutes: { type: ['integer', 'null'], minimum: 5, maximum: 6000, description: 'A rough size, not a promise.' },
+              status: { type: 'string', enum: [...COMMITMENT_STATUSES] },
+              note: { type: ['string', 'null'], maxLength: 300, description: 'Your reasoning and assumptions.' },
+            },
+            required: ['id'],
+          },
+        },
+        reviewed: { type: 'boolean', description: 'Stamp today as the date of a light review.' },
+      },
+      required: ['commitments'],
+    },
+    annotations: { destructiveHint: false, idempotentHint: true },
+  },
+  {
+    name: 'defer_commitment',
+    description:
+      `Set a commitment aside ON PURPOSE until a date within ${MAX_DEFER_DAYS} days, with a one-line reason. It won't be flagged until then, ` +
+      'and later runs will see your reason. Use it when you decided to leave something out of today\'s plan. ' +
+      'Deferring is a normal, respected choice. Pass until: null to bring it back.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        until: { type: ['string', 'null'], pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'The day it should come back. Null to clear the deferral.' },
+        reason: { type: 'string', maxLength: 200 },
+      },
+      required: ['id', 'until'],
+    },
+    annotations: { destructiveHint: false, idempotentHint: true },
+  },
+  {
     name: 'add_task',
     description: "Append one task to the end of a plan's list for the day (Plan A unless you pass plan).",
     inputSchema: {
@@ -237,6 +318,7 @@ const TOOLS = [
         minutes: minutesProp,
         notes: notesProp,
         siteKey: siteKeyProp,
+        commitment: commitmentProp,
       },
       required: ['title'],
     },
@@ -298,6 +380,7 @@ const view = (t: Task, timeZone: string) => ({
   minutes: t.minutes,
   notes: t.notes,
   siteKey: t.siteKey,
+  commitment: t.commitmentId,
   done: t.done,
   // Local HH:MM he checked it off; null while it's not done.
   completed: t.done && t.completedAt ? localTime(t.completedAt, timeZone) : null,
@@ -347,6 +430,147 @@ function checkSiteKeys(keys: (string | null | undefined)[], ctx: McpContext): vo
       );
     }
   }
+}
+
+async function loadFramework(ctx: McpContext, includeAll = false) {
+  const { store, timeZone, now } = ctx;
+  const today = plannerToday(timeZone, now);
+  const [commitments, work, log, reviewedOn] = await Promise.all([
+    store.listCommitments(),
+    store.commitmentWork(),
+    store.listFrameworkLog(10),
+    store.getMeta('framework_reviewed_on'),
+  ]);
+  return { today, commitments, framework: computeFramework(commitments, work, log, reviewedOn, today, includeAll) };
+}
+
+/** A task may only point at a commitment that exists and is still open. */
+async function checkCommitments(ids: (string | null | undefined)[], ctx: McpContext): Promise<void> {
+  const wanted = [...new Set(ids.filter((i): i is string => !!i))];
+  if (wanted.length === 0) return;
+  const byId = new Map((await ctx.store.listCommitments()).map((c) => [c.id, c]));
+  for (const id of wanted) {
+    const c = byId.get(id);
+    if (!c) throw new ValidationError(`unknown commitment "${id}": create it first with set_commitments, or leave commitment out`);
+    if (c.status !== 'open') throw new ValidationError(`commitment "${id}" is ${c.status}; leave commitment out or reopen it with set_commitments`);
+  }
+}
+
+/** After publishing today's plan: which flagged suggestions did the plan leave out? (Reported, never enforced.) */
+async function frameworkCheck(ctx: McpContext, date: string, todaysTasks: Task[]): Promise<Json | null> {
+  const { today, framework } = await loadFramework(ctx);
+  if (date !== today) return null;
+  const scheduled = new Set(todaysTasks.map((t) => t.commitmentId).filter((i): i is string => !!i));
+  const left = unaddressed(framework, scheduled);
+  if (left.length === 0 && !framework.review_due) return null;
+  return {
+    ...(left.length ? { not_in_todays_plan: left.map((i) => ({ id: i.id, title: i.title, signals: i.signals })) } : {}),
+    ...(framework.review_due ? { review_due: true } : {}),
+    hint:
+      "These are earlier agents' suggestions and the call is yours. If you leave one out on purpose, say so with defer_commitment " +
+      '(a one-line reason) or change it with set_commitments; there is no penalty for disagreeing. ' +
+      (framework.review_due ? 'A light review is due: see get_framework.' : ''),
+  };
+}
+
+function strictDate(value: unknown, name: string): string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new ValidationError(`${name} must look like YYYY-MM-DD`);
+  return resolveDate(value, 'UTC');
+}
+
+async function setCommitments(args: Json, ctx: McpContext): Promise<Json> {
+  const { store, now, timeZone } = ctx;
+  if (!Array.isArray(args.commitments)) throw new ValidationError('commitments must be an array');
+  if (args.commitments.length > MAX_OPEN_COMMITMENTS) throw new ValidationError(`at most ${MAX_OPEN_COMMITMENTS} commitments per call`);
+  const today = plannerToday(timeZone, now);
+  const stamp = (now ?? new Date()).toISOString();
+
+  // Validate and merge everything first, so a bad entry leaves the framework untouched.
+  const existing = new Map((await store.listCommitments()).map((c) => [c.id, c]));
+  const merged = new Map(existing);
+  const changed: { c: Commitment; closed: 'done' | 'dropped' | null; added: boolean }[] = [];
+  for (const raw of args.commitments) {
+    if (typeof raw !== 'object' || raw === null) throw new ValidationError('each commitment must be an object with an id');
+    const r = raw as Json;
+    const id = parseCommitmentId(r.id);
+    const old = merged.get(id);
+    const has = (k: string) => Object.prototype.hasOwnProperty.call(r, k);
+    if (!old && (typeof r.title !== 'string' || r.title.trim() === '')) throw new ValidationError(`new commitment "${id}" needs a title`);
+
+    const next: Commitment = old
+      ? { ...old }
+      : { id, title: '', due: null, start: null, targetMinutes: null, status: 'open', note: null, deferUntil: null, deferReason: null, createdOn: today, updatedAt: stamp };
+    if (has('title')) {
+      if (typeof r.title !== 'string' || r.title.trim() === '' || r.title.trim().length > 80) throw new ValidationError(`title for "${id}" must be 1 to 80 characters`);
+      next.title = r.title.trim();
+    }
+    if (has('due')) next.due = r.due === null ? null : strictDate(r.due, `due for "${id}"`);
+    if (has('start')) next.start = r.start === null ? null : strictDate(r.start, `start for "${id}"`);
+    if (has('target_minutes')) {
+      const m = r.target_minutes;
+      if (m !== null && (typeof m !== 'number' || !Number.isInteger(m) || m < 5 || m > 6000)) throw new ValidationError(`target_minutes for "${id}" must be a whole number from 5 to 6000, or null`);
+      next.targetMinutes = m as number | null;
+    }
+    if (has('note')) {
+      if (r.note !== null && (typeof r.note !== 'string' || r.note.trim().length > 300)) throw new ValidationError(`note for "${id}" must be at most 300 characters`);
+      next.note = r.note === null || (r.note as string).trim() === '' ? null : (r.note as string).trim();
+    }
+    let closed: 'done' | 'dropped' | null = null;
+    if (has('status')) {
+      if (typeof r.status !== 'string' || !(COMMITMENT_STATUSES as readonly string[]).includes(r.status)) throw new ValidationError(`status for "${id}" must be one of: ${COMMITMENT_STATUSES.join(', ')}`);
+      if (r.status !== next.status && r.status !== 'open') closed = r.status as 'done' | 'dropped';
+      next.status = r.status as CommitmentStatus;
+      if (next.status !== 'open') {
+        next.deferUntil = null;
+        next.deferReason = null;
+      }
+    }
+    next.updatedAt = stamp;
+    merged.set(id, next);
+    changed.push({ c: next, closed, added: !old });
+  }
+  const open = [...merged.values()].filter((c) => c.status === 'open').length;
+  if (open > MAX_OPEN_COMMITMENTS) {
+    throw new ValidationError(`that would leave ${open} open commitments; keep at most ${MAX_OPEN_COMMITMENTS} (drop or finish some, and keep them rough)`);
+  }
+
+  for (const { c, closed } of changed) {
+    await store.saveCommitment(c);
+    if (closed) await store.addFrameworkLog({ onDate: today, commitmentId: c.id, action: closed, detail: c.note ?? c.title });
+  }
+  if (args.reviewed === true) {
+    await store.setMeta('framework_reviewed_on', today);
+    const added = changed.filter((x) => x.added).length;
+    const closedCount = changed.filter((x) => x.closed).length;
+    await store.addFrameworkLog({ onDate: today, commitmentId: null, action: 'review', detail: `${added} added, ${closedCount} closed, ${open} open` });
+  }
+  return { saved: changed.length, open, reviewed_on: (await store.getMeta('framework_reviewed_on')) ?? null };
+}
+
+async function deferCommitment(args: Json, ctx: McpContext): Promise<Json> {
+  const { store, now, timeZone } = ctx;
+  const id = parseCommitmentId(args.id);
+  const today = plannerToday(timeZone, now);
+  const c = (await store.listCommitments()).find((x) => x.id === id);
+  if (!c) throw new ValidationError(`no commitment "${id}"`);
+  if (c.status !== 'open') throw new ValidationError(`commitment "${id}" is ${c.status}, so there is nothing to defer`);
+  const stamp = (now ?? new Date()).toISOString();
+
+  if (args.until === null) {
+    await store.saveCommitment({ ...c, deferUntil: null, deferReason: null, updatedAt: stamp });
+    await store.addFrameworkLog({ onDate: today, commitmentId: id, action: 'undefer', detail: typeof args.reason === 'string' ? args.reason.trim() : 'brought back' });
+    return { id, deferred_until: null };
+  }
+  const until = strictDate(args.until, 'until');
+  if (until <= today) throw new ValidationError('until must be after today');
+  if (until > shiftDate(today, MAX_DEFER_DAYS)) throw new ValidationError(`a deferral can last at most ${MAX_DEFER_DAYS} days; pick an earlier day (you can defer again then)`);
+  if (typeof args.reason !== 'string' || args.reason.trim() === '' || args.reason.trim().length > 200) {
+    throw new ValidationError('give a one-line reason (at most 200 characters) so later runs understand the choice');
+  }
+  const reason = args.reason.trim();
+  await store.saveCommitment({ ...c, deferUntil: until, deferReason: reason, updatedAt: stamp });
+  await store.addFrameworkLog({ onDate: today, commitmentId: id, action: 'defer', detail: `until ${until}: ${reason}` });
+  return { id, deferred_until: until, reason };
 }
 
 function parseWindow(value: unknown): number {
@@ -440,10 +664,13 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
       const plan = parsePlan(args.plan);
       const parsed = parseNewTasks(args.tasks);
       checkSiteKeys(parsed.map((t) => t.siteKey), ctx);
+      await checkCommitments(parsed.map((t) => t.commitment), ctx);
       await store.replaceDay(date, plan, parsed);
       const all = await store.list(date);
       await reconcile(store, all, ctx.sync); // a lesson already ticked on the site arrives ticked
-      return summarize(date, plan, all.filter((t) => t.plan === plan), timeZone);
+      const published = summarize(date, plan, all.filter((t) => t.plan === plan), timeZone);
+      const check = await frameworkCheck(ctx, date, all);
+      return check ? { ...published, framework_check: check } : published;
     }
     case 'set_day_info': {
       const date = resolveDate(args.date, timeZone, now);
@@ -466,6 +693,12 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
       return history(args, ctx);
     case 'get_habits':
       return habits(args, ctx);
+    case 'get_framework':
+      return { ...(await loadFramework(ctx, args.all === true)).framework };
+    case 'set_commitments':
+      return setCommitments(args, ctx);
+    case 'defer_commitment':
+      return deferCommitment(args, ctx);
     case 'set_habits': {
       const saved = await store.saveHabitNotes(parseHabitNotes(args.notes));
       return { version: saved.version, updated_at: saved.updatedAt, chars: saved.text.length };
@@ -474,6 +707,7 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
       const date = resolveDate(args.date, timeZone, now);
       const parsed = parseNewTask(args);
       checkSiteKeys([parsed.siteKey], ctx);
+      await checkCommitments([parsed.commitment], ctx);
       const added = await store.add(date, parsePlan(args.plan), parsed);
       await reconcile(store, [added], ctx.sync);
       return { added: view(added, timeZone), date };

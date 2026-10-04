@@ -4,6 +4,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   id           TEXT PRIMARY KEY,
   date         TEXT NOT NULL,                 -- planner day, YYYY-MM-DD
   plan         TEXT NOT NULL DEFAULT 'A',     -- 'A' (normal day) or 'B' (backup plan)
+  commitment_id TEXT,                         -- the framework commitment this task works on
   title        TEXT NOT NULL,
   tag          TEXT NOT NULL DEFAULT 'school',
   start_time   TEXT,                          -- 24-hour HH:MM, NULL = untimed
@@ -30,4 +31,31 @@ CREATE TABLE IF NOT EXISTS habit_notes (
   id         INTEGER PRIMARY KEY AUTOINCREMENT, -- the version number
   notes      TEXT NOT NULL,
   created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS commitments (
+  id             TEXT PRIMARY KEY,           -- short slug, e.g. piq-7
+  title          TEXT NOT NULL,
+  due            TEXT,                       -- YYYY-MM-DD
+  start_date     TEXT,
+  target_minutes INTEGER,                    -- rough size
+  status         TEXT NOT NULL DEFAULT 'open',
+  note           TEXT,                       -- the proposing agent's reasoning / assumptions
+  defer_until    TEXT,
+  defer_reason   TEXT,
+  created_on     TEXT NOT NULL,
+  updated_at     TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS framework_log (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  on_date       TEXT NOT NULL,
+  commitment_id TEXT,
+  action        TEXT NOT NULL,
+  detail        TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS framework_meta (
+  key   TEXT PRIMARY KEY,
+  value TEXT NOT NULL
 );

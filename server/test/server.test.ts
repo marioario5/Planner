@@ -138,7 +138,7 @@ describe('mcp protocol', () => {
     expect(await res.text()).toBe('');
   });
 
-  it('lists the nine tools with schemas', async () => {
+  it('lists the twelve tools with schemas', async () => {
     const { body } = await rpc('tools/list');
     expect(body.result.tools.map((t: any) => t.name)).toEqual([
       'set_daily_plan',
@@ -147,6 +147,9 @@ describe('mcp protocol', () => {
       'get_history',
       'get_habits',
       'set_habits',
+      'get_framework',
+      'set_commitments',
+      'defer_commitment',
       'add_task',
       'update_task',
       'delete_task',
@@ -333,7 +336,7 @@ describe('times and notes', () => {
     const { body } = await rpc('tools/list');
     const setPlan = body.result.tools.find((t: any) => t.name === 'set_daily_plan');
     expect(Object.keys(setPlan.inputSchema.properties.tasks.items.properties)).toEqual([
-      'title', 'tag', 'start', 'minutes', 'notes', 'siteKey',
+      'title', 'tag', 'start', 'minutes', 'notes', 'siteKey', 'commitment',
     ]);
   });
 
@@ -517,6 +520,146 @@ describe('check-off timing', () => {
     expect(day.tasks[0].late_min).toBe(10);
     expect((await tool('list_tasks', { plan: 'A' })).data.timing).toBeUndefined();
     expect(a.data.plan).toBe('A');
+  });
+});
+
+describe('framework: suggestions, deferrals and the publish check', () => {
+  // NOW is the evening of 2026-10-01 (PDT): the planner day is 2026-10-01.
+  const propose = (commitments: object[], extra: object = {}) => tool('set_commitments', { commitments, ...extra });
+  const framework = async (all = false) => (await tool('get_framework', { all })).data;
+
+  it('tells every reader these are suggestions it is free to ignore, even on an empty framework', async () => {
+    const f = await framework();
+    expect(f.note_to_you).toContain('SUGGESTIONS from earlier planning runs');
+    expect(f.note_to_you).toContain('free to follow, resize, split, defer or drop');
+    expect(f.counts.open).toBe(0);
+    expect(f.review_due).toBe(true);
+    expect(f.review_hint).toContain('your call how much');
+  });
+
+  it('says in its tool descriptions that these are suggestions and the agent has freedom', async () => {
+    const { body } = await rpc('tools/list');
+    const desc = (n: string) => body.result.tools.find((t: any) => t.name === n).description as string;
+    expect(desc('get_framework')).toContain('SUGGESTIONS from earlier planning runs');
+    expect(desc('get_framework')).toContain('free to');
+    expect(desc('get_framework')).toContain('never WHEN');
+    expect(desc('set_commitments')).toContain('disagree');
+    expect(desc('defer_commitment')).toContain('normal, respected choice');
+  });
+
+  it('stores rough commitments with the proposing agent\'s reasoning, and merges partial updates', async () => {
+    const saved = await propose([
+      { id: 'piq-7', title: 'PIQ 7 draft', due: '2026-10-20', target_minutes: 180, note: 'assumed 3 sessions of ~60 min, outline first' },
+      { id: 'common-app', title: 'Common App essay', due: '2026-11-01', target_minutes: 300 },
+    ]);
+    expect(saved.data).toMatchObject({ saved: 2, open: 2, reviewed_on: null });
+    await propose([{ id: 'piq-7', target_minutes: 240, note: null }]); // partial: title and due stay
+    const items = (await framework(true)).all_open;
+    expect(items.find((i: any) => i.id === 'piq-7')).toMatchObject({
+      title: 'PIQ 7 draft', due: '2026-10-20', target_minutes: 240, note: null, proposed_on: '2026-10-01',
+    });
+  });
+
+  it('notices in plain words when a suggestion looks like it is slipping, without calling it a violation', async () => {
+    await propose([{ id: 'common-app', title: 'Common App essay', due: '2026-10-15', target_minutes: 300, start: '2026-09-20' }]);
+    const f = await framework();
+    expect(f.worth_a_look).toHaveLength(1);
+    expect(f.worth_a_look[0].signals.join(' | ')).toContain('on a steady pace about 132 min would be done by now; 0 logged');
+    expect(JSON.stringify(f.worth_a_look[0].signals)).not.toMatch(/must|violat|failed|should have/i);
+  });
+
+  it('reports a flagged suggestion the plan left out, but never blocks publishing', async () => {
+    await propose([{ id: 'piq-7', title: 'PIQ 7 draft', due: '2026-10-02', target_minutes: 180 }]); // 180 min in 1 day: tight
+    const left = await tool('set_daily_plan', { tasks: [{ title: 'Calc', minutes: 30, start: '15:30' }] });
+    expect(left.isError).toBe(false); // published regardless
+    expect(left.data.framework_check.not_in_todays_plan.map((i: any) => i.id)).toEqual(['piq-7']);
+    expect(left.data.framework_check.hint).toContain('no penalty for disagreeing');
+    expect(left.data.framework_check.hint).toContain("earlier agents' suggestions");
+
+    const covered = await tool('set_daily_plan', { tasks: [{ title: 'PIQ 7 outline', minutes: 45, start: '15:30', commitment: 'piq-7' }] });
+    expect(covered.data.framework_check?.not_in_todays_plan).toBeUndefined();
+  });
+
+  it('lets an agent leave something out on purpose, and keeps the reason for the next one', async () => {
+    await propose([{ id: 'sat-prep', title: 'SAT prep push', due: '2026-10-03', target_minutes: 300 }], { reviewed: true });
+    const deferred = await tool('defer_commitment', { id: 'sat-prep', until: '2026-10-05', reason: 'SAT taper: nothing new before the test' });
+    expect(deferred.data).toMatchObject({ id: 'sat-prep', deferred_until: '2026-10-05' });
+
+    const f = await framework();
+    expect(f.worth_a_look).toEqual([]);
+    expect(f.deferred[0]).toMatchObject({ id: 'sat-prep', deferred_until: '2026-10-05', deferred_reason: 'SAT taper: nothing new before the test' });
+    expect(f.recent_choices[0]).toMatchObject({ commitment: 'sat-prep', action: 'defer', detail: 'until 2026-10-05: SAT taper: nothing new before the test' });
+    const quiet = await tool('set_daily_plan', { tasks: [{ title: 'Calc' }] });
+    expect(quiet.data.framework_check).toBeUndefined(); // deferred on purpose and reviewed: nothing to report
+
+    expect((await tool('defer_commitment', { id: 'sat-prep', until: null, reason: 'plans changed' })).data.deferred_until).toBeNull();
+    expect((await framework()).worth_a_look.map((i: any) => i.id)).toEqual(['sat-prep']);
+  });
+
+  it('limits deferrals to 14 days and requires a reason, so choices stay deliberate', async () => {
+    await propose([{ id: 'a', title: 'A', due: '2026-10-20' }]);
+    expect((await tool('defer_commitment', { id: 'a', until: '2026-10-20', reason: 'x' })).isError).toBe(true); // 19 days
+    expect((await tool('defer_commitment', { id: 'a', until: '2026-10-15', reason: 'x' })).isError).toBe(false); // exactly 14
+    expect((await tool('defer_commitment', { id: 'a', until: '2026-10-01', reason: 'x' })).isError).toBe(true); // not after today
+    expect((await tool('defer_commitment', { id: 'a', until: '2026-10-05', reason: '   ' })).isError).toBe(true);
+    expect((await tool('defer_commitment', { id: 'ghost', until: '2026-10-05', reason: 'x' })).isError).toBe(true);
+    expect((await tool('defer_commitment', { id: 'a', until: 'soon', reason: 'x' })).isError).toBe(true);
+  });
+
+  it('lets the current agent close, resize or drop suggestions, and records closings', async () => {
+    await propose([{ id: 'a', title: 'A', due: '2026-10-20' }, { id: 'b', title: 'B', due: '2026-10-21' }]);
+    await propose([{ id: 'a', status: 'done', note: 'finished early' }, { id: 'b', status: 'dropped', note: 'no longer relevant' }], { reviewed: true });
+    const f = await framework(true);
+    expect(f.counts.open).toBe(0);
+    expect(f.recent_choices.map((c: any) => `${c.action}:${c.commitment}`)).toEqual(['review:null', 'dropped:b', 'done:a']);
+    expect(f.review_due).toBe(false);
+    expect(f.reviewed_on).toBe('2026-10-01');
+  });
+
+  it('keeps the framework light: at most 25 open, validated as a whole before anything is saved', async () => {
+    const many = Array.from({ length: 26 }, (_, i) => ({ id: `item-${i}`, title: `Item ${i}` }));
+    expect((await propose(many.slice(0, 25))).isError).toBe(false);
+    const over = await propose([{ id: 'one-more', title: 'One more' }]);
+    expect(over.isError).toBe(true);
+    expect(over.text).toContain('keep at most 25');
+    // a bad entry in a batch leaves everything untouched
+    const mixed = await propose([{ id: 'item-0', title: 'Renamed' }, { id: 'Bad Id', title: 'x' }]);
+    expect(mixed.isError).toBe(true);
+    expect((await framework(true)).all_open.find((i: any) => i.id === 'item-0').title).toBe('Item 0');
+    for (const bad of [
+      [{ id: 'new-one' }], // no title
+      [{ id: 'x', title: 'x', due: '2026-02-31' }],
+      [{ id: 'x', title: 'x', target_minutes: 2 }],
+      [{ id: 'x', title: 'x', status: 'paused' }],
+      [{ id: 'x', title: 'x', note: 'n'.repeat(301) }],
+      'nope',
+    ]) expect((await tool('set_commitments', { commitments: bad })).isError, JSON.stringify(bad)).toBe(true);
+  });
+
+  it('only lets tasks point at a commitment that exists and is open', async () => {
+    await propose([{ id: 'real', title: 'Real' }, { id: 'gone', title: 'Gone', status: 'dropped' }]);
+    const unknown = await tool('set_daily_plan', { tasks: [{ title: 'x', commitment: 'nope' }] });
+    expect(unknown.isError).toBe(true);
+    expect(unknown.text).toContain('create it first with set_commitments');
+    expect((await tool('set_daily_plan', { tasks: [{ title: 'x', commitment: 'gone' }] })).isError).toBe(true);
+    expect((await tool('add_task', { title: 'x', commitment: 'nope' })).isError).toBe(true);
+    expect((await tool('set_daily_plan', { tasks: [{ title: 'x', commitment: 'Bad Id' }] })).isError).toBe(true);
+    const ok = await tool('set_daily_plan', { tasks: [{ title: 'x', commitment: 'real' }] });
+    expect(ok.data.tasks[0].commitment).toBe('real');
+  });
+
+  it('counts real progress from check-offs on linked tasks', async () => {
+    await propose([{ id: 'piq-7', title: 'PIQ 7 draft', due: '2026-10-20', target_minutes: 180 }]);
+    const plan = await tool('set_daily_plan', { tasks: [{ title: 'PIQ 7 outline', minutes: 45, commitment: 'piq-7' }, { title: 'PIQ 7 write', minutes: 60, commitment: 'piq-7' }] });
+    await tool('update_task', { id: plan.data.tasks[0].id, done: true });
+    const item = (await framework(true)).all_open[0];
+    expect(item).toMatchObject({ done_minutes: 45, remaining_minutes: 135 });
+  });
+
+  it('does not nag about the framework when publishing a day that is not today', async () => {
+    await propose([{ id: 'a', title: 'A', due: '2026-10-05' }]);
+    const other = await tool('set_daily_plan', { date: '2026-10-09', tasks: [{ title: 'later' }] });
+    expect(other.data.framework_check).toBeUndefined();
   });
 });
 

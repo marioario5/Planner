@@ -1,6 +1,9 @@
 import {
   normalizeTitle,
+  type Commitment,
+  type CommitmentWork,
   type DayInfo,
+  type FrameworkLogEntry,
   type HabitNotes,
   type HabitVersion,
   type NewTask,
@@ -17,6 +20,9 @@ export class MemoryTaskStore implements TaskStore {
   private info = new Map<string, DayInfo>();
   private habits: HabitNotes[] = [];
   private habitSeq = 0;
+  private commitments = new Map<string, Commitment>();
+  private log: FrameworkLogEntry[] = [];
+  private meta = new Map<string, string>();
   /** Tests can pin the clock that stamps check-offs. */
   clock: () => number = () => Date.now();
 
@@ -95,6 +101,37 @@ export class MemoryTaskStore implements TaskStore {
     task.completedAt = done ? new Date(atMs).toISOString() : null;
   }
 
+  async listCommitments(): Promise<Commitment[]> {
+    const key = (c: Commitment) => c.due ?? '9999-99-99';
+    return [...this.commitments.values()].sort((a, b) => (key(a) === key(b) ? (a.id < b.id ? -1 : 1) : key(a) < key(b) ? -1 : 1));
+  }
+
+  async saveCommitment(c: Commitment): Promise<void> {
+    this.commitments.set(c.id, { ...c });
+  }
+
+  async commitmentWork(): Promise<CommitmentWork[]> {
+    return this.tasks
+      .filter((t) => t.commitmentId !== null)
+      .map((t) => ({ commitmentId: t.commitmentId!, date: t.date, minutes: t.minutes, done: t.done }));
+  }
+
+  async addFrameworkLog(entry: FrameworkLogEntry): Promise<void> {
+    this.log.unshift(entry);
+  }
+
+  async listFrameworkLog(limit: number): Promise<FrameworkLogEntry[]> {
+    return this.log.slice(0, limit);
+  }
+
+  async getMeta(key: string): Promise<string | null> {
+    return this.meta.get(key) ?? null;
+  }
+
+  async setMeta(key: string, value: string): Promise<void> {
+    this.meta.set(key, value);
+  }
+
   async saveHabitNotes(text: string): Promise<HabitNotes> {
     const saved = { version: ++this.habitSeq, text, updatedAt: new Date(this.clock()).toISOString() };
     this.habits = [saved, ...this.habits].slice(0, 10);
@@ -130,6 +167,7 @@ export class MemoryTaskStore implements TaskStore {
       id: `t${++this.seq}`,
       date,
       plan,
+      commitmentId: task.commitment,
       title: task.title,
       tag: task.tag,
       start: task.start,

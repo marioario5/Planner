@@ -12,6 +12,8 @@ export interface Task {
   id: string;
   date: string; // planner day, YYYY-MM-DD
   plan: Plan;
+  /** The framework commitment this task works on (e.g. "piq-7"), or null. */
+  commitmentId: string | null;
   title: string;
   tag: Tag;
   /** 24-hour "HH:MM" in the planner's time zone, or null for untimed tasks. */
@@ -31,6 +33,7 @@ export interface Task {
 export interface NewTask {
   title: string;
   tag: Tag;
+  commitment: string | null;
   start: string | null;
   minutes: number | null;
   notes: string | null;
@@ -57,6 +60,48 @@ export interface InfoSection {
 export interface DayInfo {
   headline: string | null;
   sections: InfoSection[];
+}
+
+export const COMMITMENT_STATUSES = ['open', 'done', 'dropped'] as const;
+export type CommitmentStatus = (typeof COMMITMENT_STATUSES)[number];
+
+/**
+ * A SUGGESTION from an earlier planning run: something it thought should not be forgotten, with a due date
+ * and a rough size, and its reasoning in `note`. It is a forecast made with less information than the
+ * current run has. It says WHAT might matter, never WHEN; the current planner is free to follow it,
+ * resize it, defer it, or drop it, as long as that is a choice and not an accident.
+ */
+export interface Commitment {
+  id: string;
+  title: string;
+  due: string | null; // YYYY-MM-DD
+  /** Start of the work window, for the pace signal; defaults to the day it was proposed. */
+  start: string | null;
+  targetMinutes: number | null;
+  status: CommitmentStatus;
+  /** The earlier agent's reasoning and assumptions ("assumed 3 sessions of ~60 min, outline first"). */
+  note: string | null;
+  /** While today < deferUntil the commitment is consciously set aside, with a reason. */
+  deferUntil: string | null;
+  deferReason: string | null;
+  /** The planner day it was proposed. */
+  createdOn: string;
+  updatedAt: string;
+}
+
+/** The slice of a task the framework needs to measure progress. */
+export interface CommitmentWork {
+  commitmentId: string;
+  date: string;
+  minutes: number | null;
+  done: boolean;
+}
+
+export interface FrameworkLogEntry {
+  onDate: string;
+  commitmentId: string | null;
+  action: 'defer' | 'undefer' | 'done' | 'dropped' | 'review';
+  detail: string;
 }
 
 /** The living note Claude keeps about how he works. Each save is a new version; the last 10 are kept. */
@@ -87,6 +132,15 @@ export interface TaskStore {
   setCompletedAt(id: string, atMs: number): Promise<void>;
   /** Applies a check-off that came from the progress site, keeping the site's timestamp. */
   setDoneFromSite(id: string, done: boolean, atMs: number): Promise<void>;
+  listCommitments(): Promise<Commitment[]>;
+  saveCommitment(c: Commitment): Promise<void>;
+  /** Every task linked to a commitment (any plan, any day). */
+  commitmentWork(): Promise<CommitmentWork[]>;
+  addFrameworkLog(entry: FrameworkLogEntry): Promise<void>;
+  /** Newest first. */
+  listFrameworkLog(limit: number): Promise<FrameworkLogEntry[]>;
+  getMeta(key: string): Promise<string | null>;
+  setMeta(key: string, value: string): Promise<void>;
   /** Saves a new version of the habit notes and returns it. Older versions beyond the last 10 are dropped. */
   saveHabitNotes(text: string): Promise<HabitNotes>;
   /** The latest habit notes, or a specific version; null if none. */
@@ -168,14 +222,27 @@ export function parseSiteKey(value: unknown): string | null {
   return value;
 }
 
+export function parseCommitmentId(value: unknown): string {
+  if (typeof value !== 'string' || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(value)) {
+    throw new ValidationError('commitment id must be a short slug like "piq-7": lowercase letters, digits and hyphens');
+  }
+  return value;
+}
+
+function parseCommitmentRef(value: unknown): string | null {
+  if (value === undefined || value === null || value === '') return null;
+  return parseCommitmentId(value);
+}
+
 export function parseNewTask(value: unknown): NewTask {
   if (typeof value !== 'object' || value === null) {
     throw new ValidationError('each task must be an object with a title');
   }
-  const { title, tag, start, minutes, notes, siteKey } = value as Record<string, unknown>;
+  const { title, tag, start, minutes, notes, siteKey, commitment } = value as Record<string, unknown>;
   return {
     title: parseTitle(title),
     tag: parseTag(tag),
+    commitment: parseCommitmentRef(commitment),
     start: parseStart(start),
     minutes: parseMinutes(minutes),
     notes: parseNotes(notes),

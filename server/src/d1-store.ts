@@ -1,6 +1,10 @@
 import {
   normalizeTitle,
+  type Commitment,
+  type CommitmentStatus,
+  type CommitmentWork,
   type DayInfo,
+  type FrameworkLogEntry,
   type HabitNotes,
   type HabitVersion,
   type NewTask,
@@ -15,6 +19,7 @@ interface Row {
   id: string;
   date: string;
   plan: string;
+  commitment_id: string | null;
   title: string;
   tag: string;
   start_time: string | null;
@@ -33,6 +38,7 @@ function toTask(row: Row): Task {
     id: row.id,
     date: row.date,
     plan: row.plan as Plan,
+    commitmentId: row.commitment_id,
     title: row.title,
     tag: row.tag as Tag,
     start: row.start_time,
@@ -50,8 +56,8 @@ function toTask(row: Row): Task {
 const newId = () => crypto.randomUUID().slice(0, 8);
 
 const INSERT = `INSERT INTO tasks
-  (id, date, plan, title, tag, start_time, minutes, notes, site_key, done, done_at, position, created_at, completed_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  (id, date, plan, commitment_id, title, tag, start_time, minutes, notes, site_key, done, done_at, position, created_at, completed_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 export class D1TaskStore implements TaskStore {
   constructor(private readonly db: D1Database) {}
@@ -93,6 +99,7 @@ export class D1TaskStore implements TaskStore {
         id,
         date,
         plan,
+        task.commitment,
         task.title,
         task.tag,
         task.start,
@@ -129,6 +136,7 @@ export class D1TaskStore implements TaskStore {
             newId(),
             date,
             plan,
+            task.commitment,
             task.title,
             task.tag,
             task.start,
@@ -197,6 +205,87 @@ export class D1TaskStore implements TaskStore {
     await this.db
       .prepare('UPDATE tasks SET done = ?, done_at = ?, completed_at = ? WHERE id = ?')
       .bind(done ? 1 : 0, atMs, done ? new Date(atMs).toISOString() : null, id)
+      .run();
+  }
+
+  async listCommitments(): Promise<Commitment[]> {
+    const { results } = await this.db
+      .prepare('SELECT * FROM commitments ORDER BY due IS NULL, due, id')
+      .all<{
+        id: string; title: string; due: string | null; start_date: string | null; target_minutes: number | null;
+        status: string; note: string | null; defer_until: string | null; defer_reason: string | null;
+        created_on: string; updated_at: string;
+      }>();
+    return results.map((r) => ({
+      id: r.id,
+      title: r.title,
+      due: r.due,
+      start: r.start_date,
+      targetMinutes: r.target_minutes,
+      status: r.status as CommitmentStatus,
+      note: r.note,
+      deferUntil: r.defer_until,
+      deferReason: r.defer_reason,
+      createdOn: r.created_on,
+      updatedAt: r.updated_at,
+    }));
+  }
+
+  async saveCommitment(c: Commitment): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO commitments
+           (id, title, due, start_date, target_minutes, status, note, defer_until, defer_reason, created_on, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           title = excluded.title, due = excluded.due, start_date = excluded.start_date,
+           target_minutes = excluded.target_minutes, status = excluded.status, note = excluded.note,
+           defer_until = excluded.defer_until, defer_reason = excluded.defer_reason, updated_at = excluded.updated_at`,
+      )
+      .bind(c.id, c.title, c.due, c.start, c.targetMinutes, c.status, c.note, c.deferUntil, c.deferReason, c.createdOn, c.updatedAt)
+      .run();
+  }
+
+  async commitmentWork(): Promise<CommitmentWork[]> {
+    const { results } = await this.db
+      .prepare('SELECT commitment_id, date, minutes, done FROM tasks WHERE commitment_id IS NOT NULL')
+      .all<{ commitment_id: string; date: string; minutes: number | null; done: number }>();
+    return results.map((r) => ({ commitmentId: r.commitment_id, date: r.date, minutes: r.minutes, done: r.done === 1 }));
+  }
+
+  async addFrameworkLog(entry: FrameworkLogEntry): Promise<void> {
+    await this.db
+      .prepare('INSERT INTO framework_log (on_date, commitment_id, action, detail) VALUES (?, ?, ?, ?)')
+      .bind(entry.onDate, entry.commitmentId, entry.action, entry.detail)
+      .run();
+    // Keep the log small: the newest 200 entries.
+    await this.db
+      .prepare('DELETE FROM framework_log WHERE id NOT IN (SELECT id FROM framework_log ORDER BY id DESC LIMIT 200)')
+      .run();
+  }
+
+  async listFrameworkLog(limit: number): Promise<FrameworkLogEntry[]> {
+    const { results } = await this.db
+      .prepare('SELECT on_date, commitment_id, action, detail FROM framework_log ORDER BY id DESC LIMIT ?')
+      .bind(limit)
+      .all<{ on_date: string; commitment_id: string | null; action: string; detail: string }>();
+    return results.map((r) => ({
+      onDate: r.on_date,
+      commitmentId: r.commitment_id,
+      action: r.action as FrameworkLogEntry['action'],
+      detail: r.detail,
+    }));
+  }
+
+  async getMeta(key: string): Promise<string | null> {
+    const row = await this.db.prepare('SELECT value FROM framework_meta WHERE key = ?').bind(key).first<{ value: string }>();
+    return row?.value ?? null;
+  }
+
+  async setMeta(key: string, value: string): Promise<void> {
+    await this.db
+      .prepare('INSERT INTO framework_meta (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value')
+      .bind(key, value)
       .run();
   }
 
