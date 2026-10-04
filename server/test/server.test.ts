@@ -443,6 +443,7 @@ describe('check-off timing', () => {
         { title: 'B', planned_position: 2, done_position: 1 },
       ],
       ticked_in_bulk: false,
+      backfilled: [],
     });
 
     // list_tasks carries the same facts for the plan
@@ -514,6 +515,121 @@ describe('check-off timing', () => {
     expect(day.tasks[0].late_min).toBe(10);
     expect((await tool('list_tasks', { plan: 'A' })).data.timing).toBeUndefined();
     expect(a.data.plan).toBe('A');
+  });
+});
+
+describe('backfilled ticks and reported finish times', () => {
+  // 2026-10-01 is PDT (UTC-7): local h:m on that day (+ dayOffset) as epoch ms.
+  const at = (h: number, m: number, dayOffset = 0) => Date.UTC(2026, 9, 1 + dayOffset, h + 7, m);
+  const plan = (tasks: object[]) => tool('set_daily_plan', { tasks });
+  const blocks = () =>
+    plan([
+      { title: 'A', start: '15:30', minutes: 25 }, // ends 15:55
+      { title: 'B', start: '16:00', minutes: 30 },
+      { title: 'C', start: '17:00', minutes: 20 },
+    ]);
+  const tickAt = async (id: string, ms: number, extra: object = {}) => {
+    store.clock = () => ms;
+    return tool('update_task', { id, done: true, ...extra });
+  };
+  const firstDay = async () => (await tool('get_history', { days: 1 })).data.days[0];
+
+  it('treats a tick after the planner day ended (04:00) as a backfill, not a late finish', async () => {
+    const { data } = await blocks();
+    await tickAt(data.tasks[0].id, at(10, 0, 1)); // 10am the next morning
+    const day = await firstDay();
+    expect(day.tasks[0]).toMatchObject({ completed_at: '2026-10-02 10:00', late_min: null, backfilled: true });
+    expect(day.timing).toEqual({
+      first_done: null,
+      last_done: null,
+      avg_late_min: null,
+      max_late_min: null,
+      out_of_order: [],
+      ticked_in_bulk: false,
+      backfilled: ['A'],
+    });
+  });
+
+  it('uses 04:00 as the exact boundary', async () => {
+    const { data } = await blocks();
+    await tickAt(data.tasks[0].id, at(3, 59, 1));
+    await tickAt(data.tasks[1].id, at(4, 0, 1));
+    const byTitle = Object.fromEntries((await firstDay()).tasks.map((t: any) => [t.title, t]));
+    expect(byTitle.A).toMatchObject({ backfilled: false, late_min: 1440 + 239 - 955 });
+    expect(byTitle.B).toMatchObject({ backfilled: true, late_min: null });
+  });
+
+  it('keeps backfills out of the statistics but still lists them', async () => {
+    const { data } = await blocks();
+    await tickAt(data.tasks[0].id, at(16, 0)); // 5 min late
+    await tickAt(data.tasks[1].id, at(10, 0, 1)); // backfilled
+    await tickAt(data.tasks[2].id, at(17, 30)); // 10 min late
+    const { timing } = await firstDay();
+    expect(timing).toMatchObject({
+      first_done: '16:00',
+      last_done: '17:30',
+      avg_late_min: 8, // (5 + 10) / 2, rounded
+      max_late_min: 10,
+      out_of_order: [],
+      backfilled: ['B'],
+    });
+  });
+
+  it('records the finish time he reports, not the moment of ticking', async () => {
+    const { data } = await blocks();
+    const res = await tickAt(data.tasks[0].id, at(10, 0, 1), { completed: '18:15' }); // ticked next morning
+    expect(res.data.updated).toMatchObject({ completed: '18:15', completed_at: '2026-10-01 18:15', late_min: 140, backfilled: false });
+    const day = await firstDay();
+    expect(day.timing).toMatchObject({ first_done: '18:15', last_done: '18:15', avg_late_min: 140, backfilled: [] });
+  });
+
+  it('reads reported times before 04:00 as after midnight on that planner day', async () => {
+    const { data } = await blocks();
+    // Run the request at 10am the next morning, so 01:30 has already happened.
+    store.clock = () => at(10, 0, 1);
+    const res = await handleRequest(
+      new Request(`${BASE}/mcp`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOKEN}` },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'tools/call',
+          params: { name: 'update_task', arguments: { id: data.tasks[0].id, done: true, completed: '01:30' } },
+        }),
+      }),
+      env,
+      store,
+      new Date(at(10, 0, 1)),
+    );
+    const updated = JSON.parse(((await res.json()) as any).result.content[0].text).updated;
+    expect(updated).toMatchObject({ completed_at: '2026-10-02 01:30', backfilled: false });
+  });
+
+  it('rejects a bad, future, or misused finish time without changing the task', async () => {
+    const { data } = await blocks();
+    const id = data.tasks[0].id;
+    // "now" for these requests is 22:30 on Oct 1
+    for (const completed of ['6:15pm', '25:00', '18:75']) {
+      expect((await tool('update_task', { id, done: true, completed })).isError, completed).toBe(true);
+    }
+    const future = await tool('update_task', { id, done: true, completed: '23:45' });
+    expect(future.isError).toBe(true);
+    expect(future.text).toContain("hasn't happened yet");
+    expect((await tool('update_task', { id, completed: '18:00' })).isError).toBe(true); // no done
+    expect((await tool('update_task', { id, done: false, completed: '18:00' })).isError).toBe(true);
+    expect((await tool('update_task', { id: 'ghost', done: true, completed: '18:00' })).isError).toBe(true);
+    expect((await tool('list_tasks', {})).data.done).toBe(0); // nothing got ticked
+  });
+
+  it('shows the new fields on list_tasks and advertises the argument', async () => {
+    const { data } = await blocks();
+    await tickAt(data.tasks[0].id, at(16, 0));
+    expect((await tool('list_tasks', {})).data.tasks[0]).toMatchObject({ backfilled: false, late_min: 5 });
+    const { body } = await rpc('tools/list');
+    const props = body.result.tools.find((t: any) => t.name === 'update_task').inputSchema.properties;
+    expect(new RegExp(props.completed.pattern).test('18:15')).toBe(true);
+    expect(new RegExp(props.completed.pattern).test('6:15pm')).toBe(false);
   });
 });
 

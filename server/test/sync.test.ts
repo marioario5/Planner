@@ -120,6 +120,17 @@ describe('planner -> site', () => {
     expect((site.state.tasks as unknown[]).length).toBe(4);
   });
 
+  it('a reported finish time changes the record, not the stamp sent to the site', async () => {
+    store.clock = () => 9000; // when he ticked it
+    const { data } = await publish([{ title: 'Calc 3 lesson', start: '15:30', minutes: 40, siteKey: 'calc3-t6' }]);
+    const res = await tool('update_task', { id: data.tasks[0].id, done: true, completed: '16:00' });
+    expect(res.data.updated).toMatchObject({ completed_at: '2026-10-01 16:00', late_min: -10 });
+    expect(site.entry('calc3-t6')).toEqual(['calc3-t6', 1, 9000]); // sync ordering uses the tick, not 16:00
+    // a later sync leaves the reported time alone
+    const again = await tool('list_tasks', {});
+    expect(again.data.tasks[0]).toMatchObject({ completed_at: '2026-10-01 16:00', done: true });
+  });
+
   it('rest-day rows sync like any other calc3 task', async () => {
     store.clock = () => 5000;
     const { data } = await publish([{ title: 'Rest day', tag: 'calculus3', siteKey: 'calc3-t6' }]);

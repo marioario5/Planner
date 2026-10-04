@@ -74,6 +74,15 @@ export class MemoryTaskStore implements TaskStore {
     return this.tasks.length < before;
   }
 
+  async get(id: string): Promise<Task | null> {
+    return this.tasks.find((t) => t.id === id) ?? null;
+  }
+
+  async setCompletedAt(id: string, atMs: number): Promise<void> {
+    const task = this.tasks.find((t) => t.id === id);
+    if (task?.done) task.completedAt = new Date(atMs).toISOString();
+  }
+
   async setDoneFromSite(id: string, done: boolean, atMs: number): Promise<void> {
     const task = this.tasks.find((t) => t.id === id);
     if (!task) return;

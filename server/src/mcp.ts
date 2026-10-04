@@ -2,9 +2,9 @@
 // Stateless is enough here: every tool is a self-contained read or write, so there's
 // no session to track and each POST can be answered on its own.
 
-import { localTime, resolveDate, shiftDate } from './dates';
+import { localTime, plannerTimeToEpoch, resolveDate, shiftDate } from './dates';
 import { DEFAULT_PREFIXES, isSyncable, reconcile, type SyncConfig } from './sync';
-import { completedAtLocal, dayTiming, lateMinutes } from './timing';
+import { completedAtLocal, dayTiming, isBackfilled, lateMinutes } from './timing';
 import {
   PLANS,
   TAGS,
@@ -15,6 +15,7 @@ import {
   parseNewTasks,
   parsePatch,
   parsePlan,
+  parseStart,
   type Plan,
   type Task,
   type TaskStore,
@@ -160,6 +161,7 @@ const TOOLS = [
       '(minutes after its planned end he ticked it; negative = early), plus a `timing` summary: first and last check-off, ' +
       'average and worst lateness, which tasks were done out of order, and `ticked_in_bulk` (3+ ticks within 10 minutes, ' +
       'meaning the times show when he ticked, not when he worked, so do not read lateness from them). ' +
+      'Tasks ticked after their planner day ended are `backfilled`: they are listed in `timing.backfilled` and left out of every figure. ' +
       'If a day had both Plan A and Plan B, the day shows the one he followed (the plan with more tasks checked off, A on a tie) ' +
       'and `other_plan` gives the other one\'s totals. ' +
       'Days with no tasks are left out. Use it to see what slipped and what to carry forward. ' +
@@ -204,7 +206,9 @@ const TOOLS = [
     name: 'update_task',
     description:
       "Change a task's title, tag, time, length or notes, or mark it done / not done. " +
-      'Pass null for start, minutes or notes to clear them. Get ids from list_tasks.',
+      'Pass null for start, minutes or notes to clear them. Get ids from list_tasks. ' +
+      'When marking a task done after the fact, pass `completed` with the time he actually finished so the lateness stays accurate; ' +
+      'without it the check-off is stamped with the current time.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -216,6 +220,12 @@ const TOOLS = [
         notes: { ...notesProp, type: ['string', 'null'] },
         siteKey: { ...siteKeyProp, type: ['string', 'null'] },
         done: { type: 'boolean' },
+        completed: {
+          ...startProp,
+          description:
+            "When he actually finished, 24-hour HH:MM on the task's planner day (00:00 to 03:59 means after midnight, the next morning). " +
+            'Only with done: true, and not in the future.',
+        },
       },
       required: ['id'],
     },
@@ -255,6 +265,8 @@ const view = (t: Task, timeZone: string) => ({
   completed_at: completedAtLocal(t, timeZone),
   // Minutes after its planned end (start + minutes) that he ticked it; negative = early.
   late_min: lateMinutes(t, timeZone),
+  // Ticked after its planner day ended, so the time isn't when the work happened (no lateness is reported).
+  backfilled: isBackfilled(t, timeZone),
 });
 
 function summarize(date: string, plan: Plan, tasks: Task[], timeZone: string): Json {
@@ -337,6 +349,7 @@ async function history(args: Json, ctx: McpContext): Promise<Json> {
         completed: t.done && t.completedAt ? localTime(t.completedAt, timeZone) : null,
         completed_at: completedAtLocal(t, timeZone),
         late_min: lateMinutes(t, timeZone),
+        backfilled: isBackfilled(t, timeZone),
       })),
     };
   });
@@ -385,11 +398,30 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
     }
     case 'update_task': {
       const id = parseId(args.id);
-      const { id: _id, ...rest } = args;
+      const { id: _id, completed, ...rest } = args;
+      const finishedTime = completed === undefined || completed === null ? null : parseStart(completed);
+      if (finishedTime && rest.done !== true) throw new ValidationError('completed only goes with done: true');
       const patch = parsePatch(rest);
       checkSiteKeys([patch.siteKey], ctx);
-      const task = await store.update(id, patch);
+
+      // "I actually finished at 6:15pm": validate before writing anything, then record that time
+      // instead of the moment of ticking. Site sync still uses when it was ticked.
+      let finishedAtMs: number | null = null;
+      if (finishedTime) {
+        const existing = await store.get(id);
+        if (!existing) throw new ValidationError(`no task with id ${id}`);
+        finishedAtMs = plannerTimeToEpoch(existing.date, finishedTime, timeZone);
+        if (finishedAtMs > (now ?? new Date()).getTime() + 60_000) {
+          throw new ValidationError(`${finishedTime} on ${existing.date} hasn't happened yet`);
+        }
+      }
+
+      let task = await store.update(id, patch);
       if (!task) throw new ValidationError(`no task with id ${id}`);
+      if (finishedAtMs !== null) {
+        await store.setCompletedAt(id, finishedAtMs);
+        task = (await store.get(id)) ?? task;
+      }
       if (patch.done !== undefined || patch.siteKey) await reconcile(store, [task], ctx.sync);
       return { updated: view(task, timeZone) };
     }

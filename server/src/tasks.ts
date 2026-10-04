@@ -69,6 +69,9 @@ export interface TaskStore {
   replaceDay(date: string, plan: Plan, tasks: NewTask[]): Promise<Task[]>;
   update(id: string, patch: TaskPatch): Promise<Task | null>;
   remove(id: string): Promise<boolean>;
+  get(id: string): Promise<Task | null>;
+  /** Records when a task was really finished, without changing when it was ticked (which drives site sync). */
+  setCompletedAt(id: string, atMs: number): Promise<void>;
   /** Applies a check-off that came from the progress site, keeping the site's timestamp. */
   setDoneFromSite(id: string, done: boolean, atMs: number): Promise<void>;
   /** Empty (no headline, no sections) when nothing was written for the day. */

@@ -38,6 +38,12 @@ Every check-off is timestamped, and `list_tasks` / `get_history` turn that into 
 - per day, under `timing`: `first_done`, `last_done`, `avg_late_min`, `max_late_min`, `out_of_order` (blocks done in a
   different order than planned, with planned and actual positions) and `ticked_in_bulk`.
 
+**Backfills.** A task ticked after its planner day ended (after 04:00 the next morning) is `backfilled: true`: it gets no
+`late_min`, is left out of every `timing` figure, and its title is listed in `timing.backfilled`. When marking a task
+done after the fact, `update_task` takes `completed` (24-hour `HH:MM` on that planner day; `00:00`-`03:59` means after
+midnight, and it can't be in the future) to record when he really finished. That sets the finish time used for the
+analysis only; the progress-site sync still orders changes by when the tick was made.
+
 `ticked_in_bulk` is true when 3 or more tasks were checked off within 10 minutes. The time then says when he ticked,
 not when he did the work, so it should not be read as "behind". Each plan is measured against its own times.
 

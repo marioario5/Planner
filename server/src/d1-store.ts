@@ -229,7 +229,14 @@ export class D1TaskStore implements TaskStore {
       .run();
   }
 
-  private async get(id: string): Promise<Task | null> {
+  async setCompletedAt(id: string, atMs: number): Promise<void> {
+    await this.db
+      .prepare('UPDATE tasks SET completed_at = ? WHERE id = ? AND done = 1')
+      .bind(new Date(atMs).toISOString(), id)
+      .run();
+  }
+
+  async get(id: string): Promise<Task | null> {
     const row = await this.db.prepare('SELECT * FROM tasks WHERE id = ?').bind(id).first<Row>();
     return row ? toTask(row) : null;
   }
