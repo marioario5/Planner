@@ -7,7 +7,7 @@ import { MAX_DEFER_DAYS, MAX_OPEN_COMMITMENTS, computeFramework, unaddressed } f
 import { MAX_ACTIVE_NOTES, resolvedToPrune, viewUserNotes } from './user-notes';
 import { DEFAULT_WINDOW_DAYS, MAX_WINDOW_DAYS, computeHabits } from './habits';
 import { DEFAULT_PREFIXES, isSyncable, reconcile, type SyncConfig } from './sync';
-import { completedAtLocal, dayTiming, isBackfilled, lateMinutes } from './timing';
+import { bulkTickedIds, completedAtLocal, dayTiming, isBackfilled, lateMinutes } from './timing';
 import {
   COMMITMENT_STATUSES,
   PLANS,
@@ -183,8 +183,9 @@ const TOOLS = [
       'What was planned and what he actually checked off over the last several days, oldest first. ' +
       'Each day lists its tasks with done true/false, when each was checked off (`completed_at`, local) and `late_min` ' +
       '(minutes after its planned end he ticked it; negative = early), plus a `timing` summary: first and last check-off, ' +
-      'average and worst lateness, which tasks were done out of order, and `ticked_in_bulk` (3+ ticks within 10 minutes, ' +
-      'meaning the times show when he ticked, not when he worked, so do not read lateness from them). ' +
+      'average and worst lateness, and which tasks were done out of order. Ticks that say nothing about when the work happened are ' +
+      'flagged and left out of those figures (the rest of the day still counts): `bulk_ticked` lists tasks ticked in a batch ' +
+      '(3+ within 10 minutes; their times show when he ticked, not when he worked). ' +
       'Tasks ticked after their planner day ended are `backfilled` (carried over and finished on a later day, or recorded late): they are listed in `timing.backfilled` and left out of every figure. ' +
       'If a day had both Plan A and Plan B, the day shows the one he followed (the plan with more tasks checked off, A on a tie) ' +
       'and `other_plan` gives the other one\'s totals. ' +
@@ -429,7 +430,7 @@ export interface McpContext {
 
 type Json = Record<string, unknown>;
 
-const view = (t: Task, timeZone: string) => ({
+const view = (t: Task, timeZone: string, bulk?: Set<string>) => ({
   id: t.id,
   plan: t.plan,
   title: t.title,
@@ -444,21 +445,24 @@ const view = (t: Task, timeZone: string) => ({
   completed: t.done && t.completedAt ? localTime(t.completedAt, timeZone) : null,
   // Same moment with its date ("2026-10-02 00:30"), so a tick after midnight isn't ambiguous.
   completed_at: completedAtLocal(t, timeZone),
-  // Minutes after its planned end (start + minutes) that he ticked it; negative = early.
-  late_min: lateMinutes(t, timeZone),
+  // Minutes after its planned end (start + minutes) that he ticked it; negative = early. Null for backfilled or batch-ticked tasks.
+  late_min: lateMinutes(t, timeZone, bulk),
   // Ticked after its planner day ended, so the time isn't when the work happened (no lateness is reported).
   backfilled: isBackfilled(t, timeZone),
+  // Ticked in a batch (3+ within 10 minutes), so the time is when he ticked, not when he worked (no lateness is reported).
+  bulk_ticked: bulk?.has(t.id) ?? false,
 });
 
 function summarize(date: string, plan: Plan, tasks: Task[], timeZone: string): Json {
   const timing = dayTiming(tasks, timeZone);
+  const bulk = bulkTickedIds(tasks, timeZone);
   return {
     date,
     plan,
     done: tasks.filter((t) => t.done).length,
     total: tasks.length,
     ...(timing ? { timing } : {}),
-    tasks: tasks.map((t) => view(t, timeZone)),
+    tasks: tasks.map((t) => view(t, timeZone, bulk)),
   };
 }
 
@@ -757,6 +761,7 @@ async function history(args: Json, ctx: McpContext): Promise<Json> {
     done += followed.done;
     total += followed.total;
     const timing = dayTiming(tasks, timeZone);
+    const bulk = bulkTickedIds(tasks, timeZone);
     return {
       date,
       plan: followed.plan,
@@ -772,8 +777,9 @@ async function history(args: Json, ctx: McpContext): Promise<Json> {
         done: t.done,
         completed: t.done && t.completedAt ? localTime(t.completedAt, timeZone) : null,
         completed_at: completedAtLocal(t, timeZone),
-        late_min: lateMinutes(t, timeZone),
+        late_min: lateMinutes(t, timeZone, bulk),
         backfilled: isBackfilled(t, timeZone),
+        bulk_ticked: bulk.has(t.id),
       })),
     };
   });

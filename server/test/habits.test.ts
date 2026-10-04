@@ -81,6 +81,24 @@ describe('lateness by subject', () => {
   });
 });
 
+describe('batch ticks inside an otherwise normal day', () => {
+  it('skips only the batch for lateness and time of day, and still counts it as done', () => {
+    const tasks = WEEKDAYS.flatMap((date) => [
+      task({ date, tag: 'sat', start: '15:30', minutes: 30, tick: '16:00' }), // on time, ticked alone
+      // a batch at 23:00 that would otherwise look hours late
+      task({ date, tag: 'school', start: '17:00', minutes: 30, tick: '23:00' }),
+      task({ date, tag: 'school', start: '18:00', minutes: 30, tick: '23:02' }),
+      task({ date, tag: 'school', start: '19:00', minutes: 30, tick: '23:04' }),
+    ]);
+    const h = computeHabits(tasks, TZ, TODAY);
+    expect(h.lateness_by_tag.sat).toMatchObject({ n: 5, median_late_min: 0 });
+    expect(h.lateness_by_tag.school).toBeUndefined(); // every school tick was in a batch
+    expect(h.best_times.weekday).toMatchObject({ days: 5, median_first_done: '16:00', median_last_done: '16:00' });
+    expect(h.carry_over.by_tag.school).toMatchObject({ planned: 15, done_on_day: 15, missed: 0 });
+    expect(h.data_quality).toMatchObject({ days_ticked_in_bulk: 5, bulk_ticked_tasks: 15 });
+  });
+});
+
 describe('what it leaves out', () => {
   it('keeps bulk-ticked days out of every time measure but still counts done / missed', () => {
     const tasks = [

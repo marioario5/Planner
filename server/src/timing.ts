@@ -1,9 +1,10 @@
-// What the check-off times say about how the day went: late or early, out of order,
-// ticked all at once. Pure functions over a plan's tasks so the MCP tools can report them.
+// What the check-off times say about how the day went: late or early, out of order, ticked all at once.
+// Pure functions over a plan's tasks so the MCP tools can report them.
 //
-// A tick made after the planner day has ended (04:00 the next morning) is a *backfill*: he is
-// recording something he did earlier, so its time says nothing about when the work happened.
-// Backfilled ticks are flagged and kept out of every statistic here.
+// Two kinds of tick say nothing about when the work happened, so they are flagged and kept out of every
+// lateness, order and time-of-day figure (the other ticks on the same day still count):
+//  - a *backfill*: ticked after the planner day ended (04:00 the next morning)
+//  - a *bulk tick*: three or more ticks within 10 minutes of each other (he ticked a batch)
 
 import { DAY_START_HOUR, shiftDate } from './dates';
 import type { Task } from './tasks';
@@ -51,22 +52,44 @@ export function isBackfilled(t: Task, timeZone: string): boolean {
   return tickDay > t.date;
 }
 
+const BULK_WINDOW_MS = 10 * 60_000;
+
 /**
- * Minutes after its planner day's local midnight that the task was really finished (1440+ = after
- * midnight). null if not done or backfilled, since a backfilled tick says nothing about when.
+ * The ids of tasks that were ticked in a batch: any run of three or more ticks within 10 minutes. Those times show
+ * when he ticked, not when he worked. Backfilled ticks are not counted (they are flagged separately).
  */
-export function completedMinutes(t: Task, timeZone: string): number | null {
-  if (!t.done || !t.completedAt || isBackfilled(t, timeZone)) return null;
+export function bulkTickedIds(tasks: Task[], timeZone: string): Set<string> {
+  const ticks = tasks
+    .filter((t) => t.done && t.completedAt && !isBackfilled(t, timeZone))
+    .map((t) => ({ id: t.id, ms: new Date(t.completedAt!).getTime() }))
+    .sort((a, b) => a.ms - b.ms);
+  const bulk = new Set<string>();
+  for (let i = 0; i + 2 < ticks.length; i++) {
+    if (ticks[i + 2].ms - ticks[i].ms <= BULK_WINDOW_MS) {
+      bulk.add(ticks[i].id);
+      bulk.add(ticks[i + 1].id);
+      bulk.add(ticks[i + 2].id);
+    }
+  }
+  return bulk;
+}
+
+/**
+ * Minutes after its planner day's local midnight that the task was really finished (1440+ = after midnight).
+ * null if not done, backfilled, or ticked in bulk, since those times say nothing about when the work happened.
+ */
+export function completedMinutes(t: Task, timeZone: string, bulk?: Set<string>): number | null {
+  if (!t.done || !t.completedAt || isBackfilled(t, timeZone) || bulk?.has(t.id)) return null;
   const p = localParts(t.completedAt, timeZone);
   return (dayNumber(p.date) - dayNumber(t.date)) * 1440 + p.minutes;
 }
 
 /**
  * Minutes after its planned end that the task was checked off (negative = early).
- * null unless the task is done, has both a start and a length, and wasn't backfilled.
+ * null unless the task is done, has both a start and a length, and wasn't backfilled or ticked in bulk.
  */
-export function lateMinutes(t: Task, timeZone: string): number | null {
-  if (!t.done || !t.completedAt || !t.start || !t.minutes || isBackfilled(t, timeZone)) return null;
+export function lateMinutes(t: Task, timeZone: string, bulk?: Set<string>): number | null {
+  if (!t.done || !t.completedAt || !t.start || !t.minutes || isBackfilled(t, timeZone) || bulk?.has(t.id)) return null;
   const p = localParts(t.completedAt, timeZone);
   const [h, m] = t.start.split(':').map(Number);
   const plannedEnd = h * 60 + m + t.minutes;
@@ -81,21 +104,23 @@ export interface OutOfOrder {
 }
 
 export interface DayTiming {
-  /** null when every done task was backfilled. */
+  /** From the trustworthy ticks only; null when there are none. */
   first_done: string | null;
   last_done: string | null;
-  /** Average of late_min over the tasks that have a start and a length; null if none do. */
+  /** Average of late_min over the trustworthy ticks that have a start and a length; null if none do. */
   avg_late_min: number | null;
   max_late_min: number | null;
-  /** Done tasks whose place in the order he did them differs from the planned order. */
+  /** Trustworthy done tasks whose place in the order he did them differs from the planned order. */
   out_of_order: OutOfOrder[];
-  /** 3+ check-offs within 10 minutes: the times then say when he ticked, not when he worked. */
+  /** True when some ticks were a batch (3+ within 10 minutes). */
   ticked_in_bulk: boolean;
-  /** Titles ticked after the day ended. Left out of everything above. */
+  /** Titles ticked in a batch. Left out of every figure above. */
+  bulk_ticked: string[];
+  /** Titles ticked after the day ended. Left out of every figure above. */
   backfilled: string[];
+  /** Said once, in words, when anything was left out. */
+  note?: string;
 }
-
-const BULK_WINDOW_MIN = 10;
 
 /**
  * `tasks` is one plan's tasks in planned order (the order the store lists them).
@@ -105,11 +130,14 @@ export function dayTiming(tasks: Task[], timeZone: string): DayTiming | null {
   const done = tasks.filter((t) => t.done && t.completedAt);
   if (done.length === 0) return null;
 
-  const backfilled = done.filter((t) => isBackfilled(t, timeZone)).map((t) => t.title);
+  const backfilled = done.filter((t) => isBackfilled(t, timeZone));
   const real = done.filter((t) => !isBackfilled(t, timeZone));
+  const bulkIds = bulkTickedIds(real, timeZone);
+  const bulk = real.filter((t) => bulkIds.has(t.id));
+  const trusted = real.filter((t) => !bulkIds.has(t.id));
 
-  const stamps = real.map((t) => new Date(t.completedAt!).getTime());
-  const byDone = real.map((t, i) => ({ t, ms: stamps[i], planned: i })).sort((a, b) => a.ms - b.ms || a.planned - b.planned);
+  const stamps = trusted.map((t) => new Date(t.completedAt!).getTime());
+  const byDone = trusted.map((t, i) => ({ t, ms: stamps[i], planned: i })).sort((a, b) => a.ms - b.ms || a.planned - b.planned);
 
   const out_of_order = byDone
     .map((entry, doneIndex) => ({ entry, doneIndex }))
@@ -121,19 +149,24 @@ export function dayTiming(tasks: Task[], timeZone: string): DayTiming | null {
     }))
     .sort((a, b) => a.planned_position - b.planned_position);
 
-  const late = real.map((t) => lateMinutes(t, timeZone)).filter((n): n is number => n !== null);
+  const late = trusted.map((t) => lateMinutes(t, timeZone)).filter((n): n is number => n !== null);
   const sorted = byDone.map((e) => e.ms);
-  const window = BULK_WINDOW_MIN * 60_000;
-  const bulk = sorted.some((ms, i) => i + 2 < sorted.length && sorted[i + 2] - ms <= window);
   const clock = (ms: number) => hhmm(localParts(new Date(ms).toISOString(), timeZone).minutes);
 
-  return {
+  const timing: DayTiming = {
     first_done: sorted.length ? clock(sorted[0]) : null,
     last_done: sorted.length ? clock(sorted[sorted.length - 1]) : null,
     avg_late_min: late.length ? Math.round(late.reduce((a, b) => a + b, 0) / late.length) : null,
     max_late_min: late.length ? Math.max(...late) : null,
     out_of_order,
-    ticked_in_bulk: bulk,
-    backfilled,
+    ticked_in_bulk: bulk.length > 0,
+    bulk_ticked: bulk.map((t) => t.title),
+    backfilled: backfilled.map((t) => t.title),
   };
+  const left = [
+    bulk.length ? `${bulk.length} ticked in a batch (their times show when he ticked, not when he worked)` : '',
+    backfilled.length ? `${backfilled.length} ticked after the day ended` : '',
+  ].filter(Boolean);
+  if (left.length) timing.note = `Left out of the figures above: ${left.join('; ')}.`;
+  return timing;
 }

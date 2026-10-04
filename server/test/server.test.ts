@@ -451,6 +451,7 @@ describe('check-off timing', () => {
         { title: 'B', planned_position: 2, done_position: 1 },
       ],
       ticked_in_bulk: false,
+      bulk_ticked: [],
       backfilled: [],
     });
 
@@ -884,6 +885,114 @@ describe('habits: statistics and notes', () => {
   });
 });
 
+describe('batch ticks: only the batch is withheld', () => {
+  // 2026-10-01 is PDT (UTC-7): local h:m on that day as epoch ms.
+  const at = (h: number, m: number) => Date.UTC(2026, 9, 1, h + 7, m);
+  const tickAt = async (id: string, ms: number) => {
+    store.clock = () => ms;
+    await tool('update_task', { id, done: true });
+  };
+  const day = async () => (await tool('get_history', { days: 1 })).data.days[0];
+
+  // The shape of a real day: a few ticks made as the work happened, and four ticked together at 20:55.
+  const realisticDay = async () => {
+    const { data } = await tool('set_daily_plan', {
+      tasks: [
+        { title: 'SAT test', start: '10:00', minutes: 145 }, // ends 12:25
+        { title: 'Lunch', start: '12:25', minutes: 65 }, // ends 13:30
+        { title: 'Gov', start: '13:30', minutes: 35 }, // ends 14:05
+        { title: 'Calc learn', start: '14:15', minutes: 30 }, // ends 14:45
+        { title: 'Bench', start: '15:45', minutes: 120 }, // ends 17:45
+        { title: 'Photo', start: '17:50', minutes: 20 }, // ends 18:10
+        { title: 'Dinner', start: '19:30', minutes: 30 }, // ends 20:00
+      ],
+    });
+    const id = (t: string) => data.tasks.find((x: any) => x.title === t).id;
+    await tickAt(id('Bench'), at(17, 50)); // 5 min late
+    await tickAt(id('Photo'), at(18, 47)); // 37 min late
+    for (const t of ['SAT test', 'Lunch', 'Gov', 'Dinner']) await tickAt(id(t), at(20, 55)); // a batch
+    await tickAt(id('Calc learn'), at(23, 11)); // 506 min late, but ticked alone
+  };
+
+  it('withholds lateness and order for the batch but keeps every other tick that day', async () => {
+    await realisticDay();
+    const d = await day();
+    const byTitle = Object.fromEntries(d.tasks.map((t: any) => [t.title, t]));
+    for (const t of ['SAT test', 'Lunch', 'Gov', 'Dinner']) {
+      expect(byTitle[t], t).toMatchObject({ late_min: null, bulk_ticked: true, completed: '20:55' });
+    }
+    expect(byTitle.Bench).toMatchObject({ late_min: 5, bulk_ticked: false });
+    expect(byTitle.Photo).toMatchObject({ late_min: 37, bulk_ticked: false });
+    expect(byTitle['Calc learn']).toMatchObject({ late_min: 506, bulk_ticked: false });
+
+    expect(d.timing).toEqual({
+      first_done: '17:50',
+      last_done: '23:11',
+      avg_late_min: 183, // (506 + 5 + 37) / 3, the three trustworthy ticks
+      max_late_min: 506,
+      // order among the trustworthy ticks only: planned Calc, Bench, Photo; done Bench, Photo, Calc
+      out_of_order: [
+        { title: 'Calc learn', planned_position: 1, done_position: 3 },
+        { title: 'Bench', planned_position: 2, done_position: 1 },
+        { title: 'Photo', planned_position: 3, done_position: 2 },
+      ],
+      ticked_in_bulk: true,
+      bulk_ticked: ['SAT test', 'Lunch', 'Gov', 'Dinner'],
+      backfilled: [],
+      note: 'Left out of the figures above: 4 ticked in a batch (their times show when he ticked, not when he worked).',
+    });
+  });
+
+  it('shows the same on list_tasks', async () => {
+    await realisticDay();
+    const list = (await tool('list_tasks', {})).data;
+    expect(list.timing.bulk_ticked).toHaveLength(4);
+    expect(list.tasks.find((t: any) => t.title === 'Dinner')).toMatchObject({ late_min: null, bulk_ticked: true });
+    expect(list.tasks.find((t: any) => t.title === 'Photo')).toMatchObject({ late_min: 37, bulk_ticked: false });
+  });
+
+  it('does not call two ticks a batch, but does call three', async () => {
+    const { data } = await tool('set_daily_plan', {
+      tasks: [
+        { title: 'A', start: '15:00', minutes: 30 },
+        { title: 'B', start: '15:30', minutes: 30 },
+        { title: 'C', start: '16:00', minutes: 30 },
+      ],
+    });
+    await tickAt(data.tasks[0].id, at(16, 30));
+    await tickAt(data.tasks[1].id, at(16, 30));
+    let d = await day();
+    expect(d.tasks.map((t: any) => t.bulk_ticked)).toEqual([false, false, false]);
+    expect(d.timing.ticked_in_bulk).toBe(false);
+    expect(d.tasks[0].late_min).toBe(60);
+
+    await tickAt(data.tasks[2].id, at(16, 35));
+    d = await day();
+    expect(d.tasks.map((t: any) => [t.bulk_ticked, t.late_min])).toEqual([[true, null], [true, null], [true, null]]);
+    expect(d.timing).toMatchObject({
+      first_done: null, last_done: null, avg_late_min: null, max_late_min: null, out_of_order: [],
+      ticked_in_bulk: true, bulk_ticked: ['A', 'B', 'C'],
+    });
+  });
+
+  it('does not treat ticks spread more than 10 minutes apart as a batch', async () => {
+    const { data } = await tool('set_daily_plan', { tasks: [{ title: 'A', start: '15:00', minutes: 30 }, { title: 'B', start: '15:30', minutes: 30 }, { title: 'C', start: '16:00', minutes: 30 }] });
+    await tickAt(data.tasks[0].id, at(22, 0));
+    await tickAt(data.tasks[1].id, at(22, 6));
+    await tickAt(data.tasks[2].id, at(22, 12)); // 12 minutes from the first
+    expect((await day()).timing.ticked_in_bulk).toBe(false);
+  });
+
+  it('leaves a lone tick the same day untouched when a batch happens around it', async () => {
+    const { data } = await tool('set_daily_plan', { tasks: Array.from({ length: 5 }, (_, i) => ({ title: `T${i}`, start: `1${i}:00`, minutes: 30 })) });
+    await tickAt(data.tasks[0].id, at(10, 40)); // alone, 10 min late
+    for (const i of [1, 2, 3]) await tickAt(data.tasks[i].id, at(21, i)); // a batch
+    const d = await day();
+    expect(d.tasks[0]).toMatchObject({ late_min: 10, bulk_ticked: false });
+    expect(d.timing).toMatchObject({ first_done: '10:40', last_done: '10:40', avg_late_min: 10, bulk_ticked: ['T1', 'T2', 'T3'] });
+  });
+});
+
 describe('backfilled ticks and reported finish times', () => {
   // 2026-10-01 is PDT (UTC-7): local h:m on that day (+ dayOffset) as epoch ms.
   const at = (h: number, m: number, dayOffset = 0) => Date.UTC(2026, 9, 1 + dayOffset, h + 7, m);
@@ -912,7 +1021,9 @@ describe('backfilled ticks and reported finish times', () => {
       max_late_min: null,
       out_of_order: [],
       ticked_in_bulk: false,
+      bulk_ticked: [],
       backfilled: ['A'],
+      note: 'Left out of the figures above: 1 ticked after the day ended.',
     });
   });
 

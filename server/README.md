@@ -44,7 +44,7 @@ Every check-off is timestamped, and `list_tasks` / `get_history` turn that into 
 - per task: `completed_at` (local, with the date, so a tick after midnight is clear) and `late_min`, the minutes after
   the block's planned end (start + minutes) it was ticked, negative if early. Only for tasks that have both a start and a length.
 - per day, under `timing`: `first_done`, `last_done`, `avg_late_min`, `max_late_min`, `out_of_order` (blocks done in a
-  different order than planned, with planned and actual positions) and `ticked_in_bulk`.
+  different order than planned, with planned and actual positions), `ticked_in_bulk`, `bulk_ticked` and `backfilled`.
 
 **Backfills.** A task ticked after its planner day ended (after 04:00 the next morning) is `backfilled: true` (it carried over and was finished on a later day, or was recorded late): it gets no
 `late_min`, is left out of every `timing` figure, and its title is listed in `timing.backfilled`. When marking a task
@@ -52,8 +52,10 @@ done after the fact, `update_task` takes `completed` (24-hour `HH:MM` on that pl
 midnight, and it can't be in the future) to record when he really finished. That sets the finish time used for the
 analysis only; the progress-site sync still orders changes by when the tick was made.
 
-`ticked_in_bulk` is true when 3 or more tasks were checked off within 10 minutes. The time then says when he ticked,
-not when he did the work, so it should not be read as "behind". Each plan is measured against its own times.
+A **batch** is 3 or more ticks within 10 minutes of each other: the times then say when he ticked, not when he did the
+work. Only the batch is withheld. Those tasks get `late_min: null` and `bulk_ticked: true`, are listed in
+`timing.bulk_ticked`, and are left out of `first_done`, `last_done`, the lateness figures and `out_of_order`; the other
+ticks the same day keep their numbers. Each plan is measured against its own times.
 
 ### Habits
 
@@ -62,7 +64,7 @@ The scheduler learns from when he actually does things. `get_habits` returns two
 - **`stats`** (facts, computed on the server): lateness by subject (median, average, share within 10 minutes of the
   plan), when check-offs fall on weekdays vs weekends (first and last check-off, and morning / afternoon / evening / night
   shares), and carry-over and misses by subject and by where a block sits in the day (first, middle, last).
-  Only finished days and the plan he followed count. Backfilled ticks and bulk-ticked days never feed a time figure.
+  Only finished days and the plan he followed count. Backfilled ticks and batch-ticked tasks never feed a time figure (the rest of that day still counts).
   A figure with too few samples is withheld and listed under `insufficient`, and `confidence` stays `low` until there are
   5 finished days.
 - **`notes`** (interpretation, written by Claude): a short note saved with `set_habits`. Every save is a new version

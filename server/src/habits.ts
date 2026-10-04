@@ -4,12 +4,12 @@
 // Rules that keep the numbers honest:
 //  - only finished days (before today) count, and only the plan he followed on each day
 //  - backfilled ticks never feed a time measurement (their time isn't when the work happened)
-//  - a day where he ticked tasks in bulk is left out of every time measurement
+//  - tasks he ticked in a batch (3+ within 10 minutes) never feed a time measurement; the rest of that day still counts
 //  - a figure is reported only with enough samples; otherwise it is listed as insufficient
 
 import { shiftDate } from './dates';
 import { PLANS, type Plan, type Task } from './tasks';
-import { completedMinutes, dayTiming, isBackfilled, lateMinutes } from './timing';
+import { bulkTickedIds, completedMinutes, isBackfilled, lateMinutes } from './timing';
 
 export const DEFAULT_WINDOW_DAYS = 28;
 export const MAX_WINDOW_DAYS = 90;
@@ -132,7 +132,7 @@ export interface HabitStats {
     by_tag: Record<string, Outcome>;
     by_position: Record<string, Outcome>;
   };
-  data_quality: { days_ticked_in_bulk: number; backfilled_tasks: number };
+  data_quality: { days_ticked_in_bulk: number; bulk_ticked_tasks: number; backfilled_tasks: number };
 }
 
 /**
@@ -152,17 +152,16 @@ export function computeHabits(all: Task[], timeZone: string, today: string, wind
     .sort(([a], [b]) => (a < b ? -1 : 1))
     .map(([date, dayTasks]) => ({ date, tasks: followedTasks(dayTasks) }))
     .filter((d) => d.tasks.length > 0)
-    .map((d) => ({ ...d, bulk: dayTiming(d.tasks, timeZone)?.ticked_in_bulk === true }));
+    .map((d) => ({ ...d, bulkIds: bulkTickedIds(d.tasks, timeZone) }));
 
   const insufficient: HabitStats['insufficient'] = [];
 
-  // --- lateness by subject (only days whose times can be trusted) ---
+  // --- lateness by subject (ticks that say nothing about when the work happened are skipped) ---
   const lateByTag = new Map<string, number[]>();
   const lateAll: number[] = [];
   for (const day of days) {
-    if (day.bulk) continue;
     for (const t of day.tasks) {
-      const late = lateMinutes(t, timeZone);
+      const late = lateMinutes(t, timeZone, day.bulkIds);
       if (late === null) continue;
       lateByTag.set(t.tag, [...(lateByTag.get(t.tag) ?? []), late]);
       lateAll.push(late);
@@ -176,14 +175,14 @@ export function computeHabits(all: Task[], timeZone: string, today: string, wind
 
   // --- best times of day: weekdays and weekends are different animals ---
   const profile = (weekend: boolean): TimeProfile | null => {
-    const group = days.filter((d) => !d.bulk && isWeekend(d.date) === weekend);
+    const group = days.filter((d) => isWeekend(d.date) === weekend);
     const firsts: number[] = [];
     const lasts: number[] = [];
     const plannedStarts: number[] = [];
     const buckets = { morning: 0, afternoon: 0, evening: 0, night: 0 };
     let total = 0;
     for (const day of group) {
-      const finished = day.tasks.map((t) => completedMinutes(t, timeZone)).filter((m): m is number => m !== null);
+      const finished = day.tasks.map((t) => completedMinutes(t, timeZone, day.bulkIds)).filter((m): m is number => m !== null);
       if (finished.length === 0) continue;
       firsts.push(Math.min(...finished));
       lasts.push(Math.max(...finished));
@@ -252,7 +251,8 @@ export function computeHabits(all: Task[], timeZone: string, today: string, wind
       by_position,
     },
     data_quality: {
-      days_ticked_in_bulk: days.filter((d) => d.bulk).length,
+      days_ticked_in_bulk: days.filter((d) => d.bulkIds.size > 0).length,
+      bulk_ticked_tasks: days.reduce((n, d) => n + d.bulkIds.size, 0),
       backfilled_tasks: everyTask.filter((t) => isBackfilled(t, timeZone)).length,
     },
   };
