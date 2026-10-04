@@ -23,6 +23,9 @@ Claude routine ──MCP──▶  Worker + D1  ◀──REST──  Flutter app
 | `get_framework` | The month-ahead framework: a short list of suggestions from earlier runs (flagged and due-soon items, deferrals, recent choices, and whether a review is due). `all: true` adds every open item. |
 | `set_commitments` | Add or change framework items (max 25 open), close them (`done` / `dropped`), and stamp a light review with `reviewed: true`. |
 | `defer_commitment` | Consciously set an item aside for up to 14 days with a one-line reason (`until: null` brings it back). |
+| `get_user_notes` | Short summaries of general things he told earlier agents (facts, preferences, patterns, ideas), marked as not definitive; stale ones are flagged. |
+| `set_user_notes` | Record or update those notes (max 30 active, 20 per call), resolve one, or re-confirm one he said again. |
+| `delete_user_note` | Permanently delete one note, for example when he asks to be forgotten. |
 | `add_task` | Append one task to a plan (`plan?`, A by default). |
 | `update_task` | Change title / tag / time / notes, or set `done`. Pass `null` to clear `start`, `minutes` or `notes`. |
 | `delete_task` | Remove a task. |
@@ -67,6 +70,22 @@ The scheduler learns from when he actually does things. `get_habits` returns two
 
 The planner rules tell Claude when to read the statistics, how to apply them (pad by subject, schedule hard work where he
 really finishes things, move what keeps getting missed), and when it may write the note. There is nothing in the app for it.
+
+### User notes (what he's said, between runs)
+
+His School Tasks doc is replaced every evening, so anything in it that isn't about one date or assignment would be
+lost: general feelings, patterns he noticed about himself, preferences, standing facts, ideas he wants to try. User notes
+keep those between runs as short summaries, each marked as what *he* said (written by an earlier agent), with a short
+verbatim `quote` so the meaning doesn't drift when notes are re-summarized.
+
+Four kinds: `fact` ("He ordered a Raspberry Pi; no delivery date yet"), `preference`, `pattern` (his own observation about
+himself, such as when his energy is highest) and `idea` (something he wants to try). At most 30 are active; old resolved
+ones are pruned.
+
+**They are context, never instructions and never definitive.** They can be wrong, partial or out of date, and the response
+says so every time: take them into account where they fit, let what he writes today win, feel free to ignore any. A fact
+not confirmed for 14 days (45 for other kinds) is marked `stale`. His ideas can be tried as small experiments and checked
+against the habit statistics. The date-specific part of what he writes (what happened yesterday) is not recorded.
 
 ### The framework (a rough month ahead)
 
@@ -141,6 +160,7 @@ npm run db:sync:remote      # 0004: site sync columns (run once; errors if alrea
 npm run db:plans:remote     # 0005: Plan A / Plan B (run once; errors if already applied)
 npm run db:habits:remote    # 0006: habit notes (safe to repeat)
 npm run db:framework:remote # 0007: framework tables + tasks.commitment_id (the ALTER errors if already applied)
+npm run db:notes:remote     # 0008: user notes (safe to repeat)
 npm run deploy
 ```
 

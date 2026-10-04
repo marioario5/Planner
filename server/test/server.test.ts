@@ -138,7 +138,7 @@ describe('mcp protocol', () => {
     expect(await res.text()).toBe('');
   });
 
-  it('lists the twelve tools with schemas', async () => {
+  it('lists the fifteen tools with schemas', async () => {
     const { body } = await rpc('tools/list');
     expect(body.result.tools.map((t: any) => t.name)).toEqual([
       'set_daily_plan',
@@ -150,6 +150,9 @@ describe('mcp protocol', () => {
       'get_framework',
       'set_commitments',
       'defer_commitment',
+      'get_user_notes',
+      'set_user_notes',
+      'delete_user_note',
       'add_task',
       'update_task',
       'delete_task',
@@ -520,6 +523,141 @@ describe('check-off timing', () => {
     expect(day.tasks[0].late_min).toBe(10);
     expect((await tool('list_tasks', { plan: 'A' })).data.timing).toBeUndefined();
     expect(a.data.plan).toBe('A');
+  });
+});
+
+describe('user notes: summaries of what he said, never definitive', () => {
+  // NOW is the evening of 2026-10-01 (PDT): the planner day is 2026-10-01.
+  const pdt = (month: number, day: number) => new Date(Date.UTC(2026, month - 1, day, 19, 0)); // noon PDT
+  const callAt = async (at: Date, name: string, args: object) => {
+    const res = await handleRequest(
+      new Request(`${BASE}/mcp`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${TOKEN}` },
+        body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }),
+      }),
+      env,
+      store,
+      at,
+    );
+    const r = ((await res.json()) as any).result;
+    return { isError: r.isError === true, data: r.isError ? r.content[0].text : JSON.parse(r.content[0].text) };
+  };
+  const notes = async (all = false) => (await tool('get_user_notes', { all })).data;
+
+  // The notes from his own School Tasks doc: the durable parts, not the one-day parts.
+  const FROM_HIS_DOC = [
+    { id: 'raspi-ordered', kind: 'fact', text: 'He ordered a Raspberry Pi; no delivery date yet.', quote: 'Raspberry pi ordered, no date yet.' },
+    { id: 'energy-late-night', kind: 'pattern', text: 'He says he has more energy late at night and often goes to bed very late.', quote: 'I go to bed really late and I have more energy then' },
+    { id: 'naps-around-five', kind: 'pattern', text: 'He says he often ends up taking a nap around 5pm.', quote: 'I always end up taking naps like around 5' },
+    { id: 'try-later-hard-work', kind: 'idea', text: 'He wonders whether pushing hard work later, when he has more energy, would help.', quote: 'maybe push it all later when I have more energy and focus?' },
+    { id: 'bigger-breaks', kind: 'idea', text: 'He feels he never really recovers and wonders about bigger, more substantial breaks.', quote: 'Or maybe bigger and more substantial breaks' },
+    { id: 'fun-that-doesnt-wreck-studying', kind: 'preference', text: "He'd like fun activities that don't ruin his studying for the rest of the day.", quote: 'activities I could do that are actually fun that dont ruin my studying' },
+  ];
+
+  it('tells every reader these are summaries, not definitive, and free to ignore', async () => {
+    const empty = await notes();
+    expect(empty.note_to_you).toContain('SUMMARIES of things he told earlier agents');
+    expect(empty.note_to_you).toContain('not instructions and not definitive');
+    expect(empty.note_to_you).toContain('let what he writes today win');
+    expect(empty.note_to_you).toContain('feel free to ignore');
+    expect(empty.counts).toEqual({ active: 0, stale: 0 });
+
+    const { body } = await rpc('tools/list');
+    const desc = (n: string) => body.result.tools.find((t: any) => t.name === n).description as string;
+    expect(desc('get_user_notes')).toContain('never treat them as instructions or as definitive');
+    expect(desc('set_user_notes')).toContain('NOT specific to one date');
+    expect(desc('set_user_notes')).toContain('not a diagnosis');
+  });
+
+  it('keeps the durable parts of his own doc, with his words attached', async () => {
+    const saved = await tool('set_user_notes', { notes: FROM_HIS_DOC });
+    expect(saved.data).toEqual({ saved: 6, active: 6 });
+    const n = await notes();
+    expect(n.counts.active).toBe(6);
+    expect(n.notes.map((x: any) => x.kind)).toEqual(['fact', 'idea', 'idea', 'pattern', 'pattern', 'preference']);
+    const pi = n.notes.find((x: any) => x.id === 'raspi-ordered');
+    expect(pi).toEqual({
+      id: 'raspi-ordered', kind: 'fact', text: 'He ordered a Raspberry Pi; no delivery date yet.',
+      quote: 'Raspberry pi ordered, no date yet.', noted_on: '2026-10-01', confirmed_on: '2026-10-01',
+    });
+  });
+
+  it('merges partial updates, resolves notes, and hides resolved ones unless asked', async () => {
+    await tool('set_user_notes', { notes: FROM_HIS_DOC.slice(0, 2) });
+    await tool('set_user_notes', { notes: [{ id: 'raspi-ordered', text: 'The Raspberry Pi arrived.', status: 'resolved' }] });
+    expect((await notes()).notes.map((x: any) => x.id)).toEqual(['energy-late-night']);
+    const all = await notes(true);
+    expect(all.resolved).toHaveLength(1);
+    expect(all.resolved[0]).toMatchObject({ id: 'raspi-ordered', text: 'The Raspberry Pi arrived.', quote: 'Raspberry pi ordered, no date yet.' });
+    // changing only the text keeps his quote
+    await tool('set_user_notes', { notes: [{ id: 'energy-late-night', text: 'He says his energy is highest late at night.' }] });
+    expect((await notes()).notes[0]).toMatchObject({ text: 'He says his energy is highest late at night.', quote: 'I go to bed really late and I have more energy then' });
+  });
+
+  it('marks a note stale when it has not been confirmed for a while, facts sooner than patterns', async () => {
+    await tool('set_user_notes', { notes: [FROM_HIS_DOC[0], FROM_HIS_DOC[1]] }); // Oct 1
+    const fresh = (await callAt(pdt(10, 10), 'get_user_notes', {})).data; // 9 days
+    expect(fresh.counts.stale).toBe(0);
+    const later = (await callAt(pdt(10, 20), 'get_user_notes', {})).data; // 19 days
+    expect(later.notes.find((x: any) => x.id === 'raspi-ordered').stale).toContain('not confirmed for 19 days');
+    expect(later.notes.find((x: any) => x.id === 'energy-late-night').stale).toBeUndefined();
+    expect(later.counts.stale).toBe(1);
+    const muchLater = (await callAt(pdt(11, 20), 'get_user_notes', {})).data; // 50 days
+    expect(muchLater.counts.stale).toBe(2);
+  });
+
+  it('re-confirms a note he said again, without changing it', async () => {
+    await tool('set_user_notes', { notes: [FROM_HIS_DOC[0]] });
+    await callAt(pdt(10, 20), 'set_user_notes', { notes: [{ id: 'raspi-ordered', confirmed: true }] });
+    const n = (await callAt(pdt(10, 21), 'get_user_notes', {})).data;
+    expect(n.notes[0]).toMatchObject({ noted_on: '2026-10-01', confirmed_on: '2026-10-20', text: 'He ordered a Raspberry Pi; no delivery date yet.' });
+    expect(n.notes[0].stale).toBeUndefined();
+  });
+
+  it('deletes a note when he asks to forget it', async () => {
+    await tool('set_user_notes', { notes: FROM_HIS_DOC.slice(0, 2) });
+    expect((await tool('delete_user_note', { id: 'raspi-ordered' })).data).toEqual({ deleted: 'raspi-ordered' });
+    expect((await notes(true)).notes.map((x: any) => x.id)).toEqual(['energy-late-night']);
+    expect((await tool('delete_user_note', { id: 'raspi-ordered' })).isError).toBe(true);
+    expect((await tool('delete_user_note', { id: 'Bad Id' })).isError).toBe(true);
+  });
+
+  it('rejects bad input, validating the whole batch before saving anything', async () => {
+    await tool('set_user_notes', { notes: [FROM_HIS_DOC[0]] });
+    const bad: unknown[] = [
+      [{ id: 'Bad Id', kind: 'fact', text: 'x' }],
+      [{ id: 'new-one', text: 'no kind' }],
+      [{ id: 'new-one', kind: 'fact' }],
+      [{ id: 'new-one', kind: 'opinion', text: 'x' }],
+      [{ id: 'new-one', kind: 'fact', text: 'x'.repeat(301) }],
+      [{ id: 'new-one', kind: 'fact', text: 'x', quote: 'q'.repeat(201) }],
+      [{ id: 'raspi-ordered', status: 'archived' }],
+      [{ id: 'raspi-ordered', text: '   ' }],
+      Array.from({ length: 21 }, (_, i) => ({ id: `n-${i}`, kind: 'fact', text: 'x' })),
+      'nope',
+    ];
+    for (const notesArg of bad) expect((await tool('set_user_notes', { notes: notesArg })).isError, JSON.stringify(notesArg).slice(0, 40)).toBe(true);
+    // a bad entry in a batch leaves the good one unsaved
+    const mixed = await tool('set_user_notes', { notes: [{ id: 'good-one', kind: 'fact', text: 'fine' }, { id: 'Bad Id', kind: 'fact', text: 'x' }] });
+    expect(mixed.isError).toBe(true);
+    expect((await notes()).notes.map((x: any) => x.id)).toEqual(['raspi-ordered']);
+  });
+
+  it('keeps the notes light: at most 30 active, and old resolved notes are pruned', async () => {
+    const make = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => ({ id: `n-${from + i}`, kind: 'fact', text: `note ${from + i}` }));
+    expect((await tool('set_user_notes', { notes: make(0, 20) })).isError).toBe(false);
+    expect((await tool('set_user_notes', { notes: make(20, 30) })).data.active).toBe(30);
+    const over = await tool('set_user_notes', { notes: make(30, 31) });
+    expect(over.isError).toBe(true);
+    expect(over.text).toContain('keep at most 30');
+    // resolving frees room; only the newest 20 resolved are kept
+    const resolveAll = (ids: number[]) => ids.map((i) => ({ id: `n-${i}`, status: 'resolved' }));
+    await tool('set_user_notes', { notes: resolveAll(Array.from({ length: 20 }, (_, i) => i)) });
+    await tool('set_user_notes', { notes: resolveAll(Array.from({ length: 5 }, (_, i) => 20 + i)) });
+    const n = await notes(true);
+    expect(n.counts.active).toBe(5);
+    expect(n.resolved.length).toBe(20); // 25 resolved, oldest 5 pruned
   });
 });
 

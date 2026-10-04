@@ -2,6 +2,9 @@ import {
   normalizeTitle,
   type Commitment,
   type CommitmentStatus,
+  type UserNote,
+  type UserNoteKind,
+  type UserNoteStatus,
   type CommitmentWork,
   type DayInfo,
   type FrameworkLogEntry,
@@ -206,6 +209,43 @@ export class D1TaskStore implements TaskStore {
       .prepare('UPDATE tasks SET done = ?, done_at = ?, completed_at = ? WHERE id = ?')
       .bind(done ? 1 : 0, atMs, done ? new Date(atMs).toISOString() : null, id)
       .run();
+  }
+
+  async listUserNotes(): Promise<UserNote[]> {
+    const { results } = await this.db
+      .prepare('SELECT id, kind, text, quote, noted_on, confirmed_on, status, updated_at FROM user_notes ORDER BY kind, noted_on, id')
+      .all<{
+        id: string; kind: string; text: string; quote: string | null; noted_on: string;
+        confirmed_on: string; status: string; updated_at: string;
+      }>();
+    return results.map((r) => ({
+      id: r.id,
+      kind: r.kind as UserNoteKind,
+      text: r.text,
+      quote: r.quote,
+      notedOn: r.noted_on,
+      confirmedOn: r.confirmed_on,
+      status: r.status as UserNoteStatus,
+      updatedAt: r.updated_at,
+    }));
+  }
+
+  async saveUserNote(n: UserNote): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO user_notes (id, kind, text, quote, noted_on, confirmed_on, status, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           kind = excluded.kind, text = excluded.text, quote = excluded.quote, confirmed_on = excluded.confirmed_on,
+           status = excluded.status, updated_at = excluded.updated_at`,
+      )
+      .bind(n.id, n.kind, n.text, n.quote, n.notedOn, n.confirmedOn, n.status, n.updatedAt)
+      .run();
+  }
+
+  async deleteUserNote(id: string): Promise<boolean> {
+    const result = await this.db.prepare('DELETE FROM user_notes WHERE id = ?').bind(id).run();
+    return result.meta.changes > 0;
   }
 
   async listCommitments(): Promise<Commitment[]> {

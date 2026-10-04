@@ -2,6 +2,7 @@ import {
   normalizeTitle,
   type Commitment,
   type CommitmentWork,
+  type UserNote,
   type DayInfo,
   type FrameworkLogEntry,
   type HabitNotes,
@@ -21,6 +22,7 @@ export class MemoryTaskStore implements TaskStore {
   private habits: HabitNotes[] = [];
   private habitSeq = 0;
   private commitments = new Map<string, Commitment>();
+  private userNotes = new Map<string, UserNote>();
   private log: FrameworkLogEntry[] = [];
   private meta = new Map<string, string>();
   /** Tests can pin the clock that stamps check-offs. */
@@ -99,6 +101,20 @@ export class MemoryTaskStore implements TaskStore {
     task.done = done;
     task.doneAt = atMs;
     task.completedAt = done ? new Date(atMs).toISOString() : null;
+  }
+
+  async listUserNotes(): Promise<UserNote[]> {
+    return [...this.userNotes.values()].sort((a, b) =>
+      a.kind === b.kind ? (a.notedOn === b.notedOn ? (a.id < b.id ? -1 : 1) : a.notedOn < b.notedOn ? -1 : 1) : a.kind < b.kind ? -1 : 1,
+    );
+  }
+
+  async saveUserNote(n: UserNote): Promise<void> {
+    this.userNotes.set(n.id, { ...n });
+  }
+
+  async deleteUserNote(id: string): Promise<boolean> {
+    return this.userNotes.delete(id);
   }
 
   async listCommitments(): Promise<Commitment[]> {

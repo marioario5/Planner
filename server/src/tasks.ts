@@ -104,6 +104,31 @@ export interface FrameworkLogEntry {
   detail: string;
 }
 
+export const USER_NOTE_KINDS = ['fact', 'preference', 'pattern', 'idea'] as const;
+export type UserNoteKind = (typeof USER_NOTE_KINDS)[number];
+export const USER_NOTE_STATUSES = ['active', 'resolved'] as const;
+export type UserNoteStatus = (typeof USER_NOTE_STATUSES)[number];
+
+/**
+ * A short summary of something HE said that isn't tied to one date or assignment (a standing fact, a preference,
+ * a pattern he noticed about himself, an idea he wants to try). Written by an earlier agent, so it can be wrong,
+ * partial or out of date: context to take into account, never an instruction and never definitive.
+ */
+export interface UserNote {
+  id: string;
+  kind: UserNoteKind;
+  /** The summary, in a sentence about him ("He ..."), max 300 characters. */
+  text: string;
+  /** A short verbatim snippet of his own words, so the meaning doesn't drift across re-summaries. */
+  quote: string | null;
+  /** The planner day it was first recorded. */
+  notedOn: string;
+  /** The last planner day his own words (doc or chat) supported it. */
+  confirmedOn: string;
+  status: UserNoteStatus;
+  updatedAt: string;
+}
+
 /** The living note Claude keeps about how he works. Each save is a new version; the last 10 are kept. */
 export interface HabitNotes {
   version: number;
@@ -132,6 +157,9 @@ export interface TaskStore {
   setCompletedAt(id: string, atMs: number): Promise<void>;
   /** Applies a check-off that came from the progress site, keeping the site's timestamp. */
   setDoneFromSite(id: string, done: boolean, atMs: number): Promise<void>;
+  listUserNotes(): Promise<UserNote[]>;
+  saveUserNote(note: UserNote): Promise<void>;
+  deleteUserNote(id: string): Promise<boolean>;
   listCommitments(): Promise<Commitment[]>;
   saveCommitment(c: Commitment): Promise<void>;
   /** Every task linked to a commitment (any plan, any day). */
@@ -218,6 +246,13 @@ export function parseSiteKey(value: unknown): string | null {
   if (value === undefined || value === null || value === '') return null;
   if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,80}$/.test(value)) {
     throw new ValidationError('siteKey must be a site task id like calc3-t12');
+  }
+  return value;
+}
+
+export function parseUserNoteId(value: unknown): string {
+  if (typeof value !== 'string' || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(value)) {
+    throw new ValidationError('note id must be a short slug like "energy-late-night": lowercase letters, digits and hyphens');
   }
   return value;
 }
