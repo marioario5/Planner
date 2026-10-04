@@ -161,7 +161,7 @@ const TOOLS = [
       '(minutes after its planned end he ticked it; negative = early), plus a `timing` summary: first and last check-off, ' +
       'average and worst lateness, which tasks were done out of order, and `ticked_in_bulk` (3+ ticks within 10 minutes, ' +
       'meaning the times show when he ticked, not when he worked, so do not read lateness from them). ' +
-      'Tasks ticked after their planner day ended are `backfilled`: they are listed in `timing.backfilled` and left out of every figure. ' +
+      'Tasks ticked after their planner day ended are `backfilled` (carried over and finished on a later day, or recorded late): they are listed in `timing.backfilled` and left out of every figure. ' +
       'If a day had both Plan A and Plan B, the day shows the one he followed (the plan with more tasks checked off, A on a tie) ' +
       'and `other_plan` gives the other one\'s totals. ' +
       'Days with no tasks are left out. Use it to see what slipped and what to carry forward. ' +
