@@ -59,6 +59,19 @@ export interface DayInfo {
   sections: InfoSection[];
 }
 
+/** The living note Claude keeps about how he works. Each save is a new version; the last 10 are kept. */
+export interface HabitNotes {
+  version: number;
+  text: string;
+  updatedAt: string;
+}
+
+export interface HabitVersion {
+  version: number;
+  updatedAt: string;
+  chars: number;
+}
+
 export interface TaskStore {
   /** Every plan's tasks for the day: Plan A then Plan B, each timed tasks in clock order then untimed. */
   list(date: string): Promise<Task[]>;
@@ -74,6 +87,12 @@ export interface TaskStore {
   setCompletedAt(id: string, atMs: number): Promise<void>;
   /** Applies a check-off that came from the progress site, keeping the site's timestamp. */
   setDoneFromSite(id: string, done: boolean, atMs: number): Promise<void>;
+  /** Saves a new version of the habit notes and returns it. Older versions beyond the last 10 are dropped. */
+  saveHabitNotes(text: string): Promise<HabitNotes>;
+  /** The latest habit notes, or a specific version; null if none. */
+  getHabitNotes(version?: number): Promise<HabitNotes | null>;
+  /** Saved versions, newest first. */
+  listHabitVersions(): Promise<HabitVersion[]>;
   /** Empty (no headline, no sections) when nothing was written for the day. */
   getDayInfo(date: string): Promise<DayInfo>;
   /** Replaces the day's info. An empty DayInfo clears it. */
@@ -231,6 +250,19 @@ export function parseDayInfo(args: Record<string, unknown>): DayInfo {
   const list = (sections as unknown[] | undefined | null) ?? [];
   if (list.length > MAX_SECTIONS) throw new ValidationError(`at most ${MAX_SECTIONS} sections`);
   return { headline: cleanHeadline, sections: list.map(parseSection) };
+}
+
+const MAX_HABIT_NOTES = 6000;
+
+export function parseHabitNotes(value: unknown): string {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw new ValidationError('notes must be a non-empty string');
+  }
+  const text = value.trim();
+  if (text.length > MAX_HABIT_NOTES) {
+    throw new ValidationError(`notes must be at most ${MAX_HABIT_NOTES} characters (got ${text.length}); tighten them`);
+  }
+  return text;
 }
 
 export function parseId(value: unknown): string {

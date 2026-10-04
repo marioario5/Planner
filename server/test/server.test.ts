@@ -138,13 +138,15 @@ describe('mcp protocol', () => {
     expect(await res.text()).toBe('');
   });
 
-  it('lists the seven tools with schemas', async () => {
+  it('lists the nine tools with schemas', async () => {
     const { body } = await rpc('tools/list');
     expect(body.result.tools.map((t: any) => t.name)).toEqual([
       'set_daily_plan',
       'set_day_info',
       'list_tasks',
       'get_history',
+      'get_habits',
+      'set_habits',
       'add_task',
       'update_task',
       'delete_task',
@@ -515,6 +517,89 @@ describe('check-off timing', () => {
     expect(day.tasks[0].late_min).toBe(10);
     expect((await tool('list_tasks', { plan: 'A' })).data.timing).toBeUndefined();
     expect(a.data.plan).toBe('A');
+  });
+});
+
+describe('habits: statistics and notes', () => {
+  // NOW is the evening of 2026-10-01 (PDT), so the planner day is Oct 1 and finished days are earlier.
+  const tickedAt = (date: string, hhmm: string) => {
+    const [y, mo, d] = date.split('-').map(Number);
+    const [h, m] = hhmm.split(':').map(Number);
+    return Date.UTC(y, mo - 1, d, h + 7, m);
+  };
+  const seedDay = async (date: string, tickCalc: string | null) => {
+    const { data } = await tool('set_daily_plan', {
+      date,
+      tasks: [
+        { title: 'Calc', tag: 'calculus3', start: '15:30', minutes: 25 },
+        { title: 'SAT', tag: 'sat', start: '16:30', minutes: 30 }, // never ticked
+      ],
+    });
+    if (tickCalc) {
+      store.clock = () => tickedAt(date, tickCalc);
+      await tool('update_task', { id: data.tasks[0].id, done: true });
+    }
+  };
+
+  it('is honest when there is no data and no notes yet', async () => {
+    const { data } = await tool('get_habits', {});
+    expect(data.notes).toBeNull();
+    expect(data.versions).toEqual([]);
+    expect(data.stats).toMatchObject({ confidence: 'low', lateness_by_tag: {}, best_times: { weekday: null, weekend: null } });
+    expect(data.stats.window.through).toBe('2026-09-30'); // finished days only: today (Oct 1) is excluded
+  });
+
+  it('computes statistics from the check-offs of finished days', async () => {
+    for (const d of ['21', '22', '23', '24', '25']) await seedDay(`2026-09-${d}`, '16:05'); // Calc 10 min late
+    await seedDay('2026-10-01', '16:05'); // today: not finished, must not count
+    const { data } = await tool('get_habits', {});
+    expect(data.stats.confidence).toBe('ok');
+    expect(data.stats.window.days_with_tasks).toBe(5);
+    expect(data.stats.lateness_by_tag.calculus3).toEqual({ n: 5, median_late_min: 10, avg_late_min: 10, on_time_pct: 100 });
+    expect(data.stats.carry_over.by_tag.sat).toMatchObject({ planned: 5, missed: 5, done_on_day_pct: 0 });
+    expect(data.stats.best_times.weekday).toMatchObject({ days: 5, median_first_done: '16:05' });
+    // a shorter window drops the older days
+    const recent = await tool('get_habits', { days: 7 });
+    expect(recent.data.stats.window).toEqual({ from: '2026-09-24', through: '2026-09-30', days_with_tasks: 2 });
+    expect(recent.data.stats.confidence).toBe('low');
+  });
+
+  it('keeps versions of the notes, newest first, and can read an old one', async () => {
+    const first = await tool('set_habits', { notes: 'SAT blocks run ~30 min late (n=5, Sep 21-25).' });
+    expect(first.data).toMatchObject({ version: 1, chars: 'SAT blocks run ~30 min late (n=5, Sep 21-25).'.length });
+    await tool('set_habits', { notes: 'Second draft.' });
+    const { data } = await tool('get_habits', {});
+    expect(data.notes).toMatchObject({ version: 2, text: 'Second draft.' });
+    expect(data.versions.map((v: any) => v.version)).toEqual([2, 1]);
+    const old = await tool('get_habits', { version: 1 });
+    expect(old.data).toEqual({ notes: expect.objectContaining({ version: 1, text: 'SAT blocks run ~30 min late (n=5, Sep 21-25).' }) });
+  });
+
+  it('keeps only the last 10 versions', async () => {
+    for (let i = 1; i <= 12; i++) await tool('set_habits', { notes: `draft ${i}` });
+    const { data } = await tool('get_habits', {});
+    expect(data.versions.map((v: any) => v.version)).toEqual([12, 11, 10, 9, 8, 7, 6, 5, 4, 3]);
+    expect((await tool('get_habits', { version: 1 })).isError).toBe(true);
+    expect(data.notes.text).toBe('draft 12');
+  });
+
+  it('rejects bad input without saving anything', async () => {
+    await tool('set_habits', { notes: 'keep me' });
+    for (const notes of ['', '   ', 5, null, 'x'.repeat(6001)]) {
+      expect((await tool('set_habits', { notes })).isError, String(notes).slice(0, 10)).toBe(true);
+    }
+    expect((await tool('set_habits', { notes: 'x'.repeat(6000) })).isError).toBe(false); // exactly at the limit
+    for (const days of [3, 91, 7.5, '28']) expect((await tool('get_habits', { days })).isError, String(days)).toBe(true);
+    for (const version of [0, -1, 1.5, 'one', 99]) expect((await tool('get_habits', { version })).isError, String(version)).toBe(true);
+    expect((await tool('get_habits', {})).data.versions.map((v: any) => v.version)).toEqual([2, 1]);
+  });
+
+  it('advertises read-only get_habits and a notes limit on set_habits', async () => {
+    const { body } = await rpc('tools/list');
+    const tools = Object.fromEntries(body.result.tools.map((t: any) => [t.name, t]));
+    expect(tools.get_habits.annotations.readOnlyHint).toBe(true);
+    expect(tools.set_habits.inputSchema.properties.notes.maxLength).toBe(6000);
+    expect(tools.set_habits.inputSchema.required).toEqual(['notes']);
   });
 });
 

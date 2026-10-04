@@ -2,7 +2,8 @@
 // Stateless is enough here: every tool is a self-contained read or write, so there's
 // no session to track and each POST can be answered on its own.
 
-import { localTime, plannerTimeToEpoch, resolveDate, shiftDate } from './dates';
+import { localTime, plannerToday, plannerTimeToEpoch, resolveDate, shiftDate } from './dates';
+import { DEFAULT_WINDOW_DAYS, MAX_WINDOW_DAYS, computeHabits } from './habits';
 import { DEFAULT_PREFIXES, isSyncable, reconcile, type SyncConfig } from './sync';
 import { completedAtLocal, dayTiming, isBackfilled, lateMinutes } from './timing';
 import {
@@ -10,6 +11,7 @@ import {
   TAGS,
   ValidationError,
   parseDayInfo,
+  parseHabitNotes,
   parseId,
   parseNewTask,
   parseNewTasks,
@@ -28,7 +30,8 @@ const INSTRUCTIONS =
   "Manage the daily task list shown in the user's cozy planner app. " +
   'To publish a day, call set_daily_plan once with the full ordered list. ' +
   'set_day_info publishes the headline and info sections (warnings, pre-start checklist, next PCB work...) that go with the day. ' +
-  'list_tasks shows what is on the list and what the user has already checked off.';
+  'list_tasks shows what is on the list and what the user has already checked off. ' +
+  'get_habits returns statistics on how he actually works plus the habit notes you keep with set_habits; read it before planning.';
 
 const TAG_HELP =
   'school = general schoolwork; calculus3 = Calculus 3 (homework, studying, quizzes); ' +
@@ -184,6 +187,43 @@ const TOOLS = [
     annotations: { readOnlyHint: true },
   },
   {
+    name: 'get_habits',
+    description:
+      'How he actually works. `stats` are computed from his check-offs over the last `days` finished days (default 28): ' +
+      'lateness by subject, when check-offs happen on weekdays vs weekends, and what carries over or gets missed ' +
+      '(by subject and by where a block sits in the day). Figures with too few samples are withheld and listed under ' +
+      '`insufficient`, and `confidence` is "low" until there are 5 finished days, so do not write habits from thin data. ' +
+      '`notes` is the habit note you maintain with set_habits (null if none yet) and `versions` lists the saved versions; ' +
+      'pass `version` to read an older note instead.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        days: {
+          type: 'integer',
+          minimum: 7,
+          maximum: MAX_WINDOW_DAYS,
+          description: `How many finished days back to measure. Default ${DEFAULT_WINDOW_DAYS}.`,
+        },
+        version: { type: 'integer', minimum: 1, description: 'Return just this saved version of the notes.' },
+      },
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'set_habits',
+    description:
+      'Save a new version of the habit notes: a short note (max 6000 characters) about how he works, used to schedule more ' +
+      'efficiently. It replaces the whole note; the last 10 versions are kept so a bad rewrite can be undone. ' +
+      'Write only habits the get_habits stats support, cite the numbers and the window, drop habits the data no longer ' +
+      'supports, and keep it short enough to read at the start of every plan. He can read it in the app.',
+    inputSchema: {
+      type: 'object',
+      properties: { notes: { type: 'string', minLength: 1, maxLength: 6000 } },
+      required: ['notes'],
+    },
+    annotations: { destructiveHint: false, idempotentHint: false },
+  },
+  {
     name: 'add_task',
     description: "Append one task to the end of a plan's list for the day (Plan A unless you pass plan).",
     inputSchema: {
@@ -309,6 +349,42 @@ function checkSiteKeys(keys: (string | null | undefined)[], ctx: McpContext): vo
   }
 }
 
+function parseWindow(value: unknown): number {
+  if (value === undefined || value === null) return DEFAULT_WINDOW_DAYS;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 7 || value > MAX_WINDOW_DAYS) {
+    throw new ValidationError(`days must be a whole number from 7 to ${MAX_WINDOW_DAYS}`);
+  }
+  return value;
+}
+
+const noteView = (n: { version: number; updatedAt: string; text: string }) => ({
+  version: n.version,
+  updated_at: n.updatedAt,
+  text: n.text,
+});
+
+async function habits(args: Json, ctx: McpContext): Promise<Json> {
+  const { store, timeZone, now } = ctx;
+  if (args.version !== undefined && args.version !== null) {
+    if (typeof args.version !== 'number' || !Number.isInteger(args.version) || args.version < 1) {
+      throw new ValidationError('version must be a whole number from the versions list');
+    }
+    const found = await store.getHabitNotes(args.version);
+    if (!found) throw new ValidationError(`no habit notes version ${args.version}`);
+    return { notes: noteView(found) };
+  }
+  const days = parseWindow(args.days);
+  const today = plannerToday(timeZone, now);
+  const all = await store.listRange(shiftDate(today, -days), today);
+  await reconcile(store, all, ctx.sync); // pick up anything he ticked on the site
+  const [latest, versions] = await Promise.all([store.getHabitNotes(), store.listHabitVersions()]);
+  return {
+    stats: computeHabits(all, timeZone, today, days),
+    notes: latest ? noteView(latest) : null,
+    versions: versions.map((v) => ({ version: v.version, updated_at: v.updatedAt, chars: v.chars })),
+  };
+}
+
 async function history(args: Json, ctx: McpContext): Promise<Json> {
   const { store, timeZone, now } = ctx;
   const through = resolveDate(args.through, timeZone, now);
@@ -388,6 +464,12 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
     }
     case 'get_history':
       return history(args, ctx);
+    case 'get_habits':
+      return habits(args, ctx);
+    case 'set_habits': {
+      const saved = await store.saveHabitNotes(parseHabitNotes(args.notes));
+      return { version: saved.version, updated_at: saved.updatedAt, chars: saved.text.length };
+    }
     case 'add_task': {
       const date = resolveDate(args.date, timeZone, now);
       const parsed = parseNewTask(args);

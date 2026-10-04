@@ -18,6 +18,8 @@ Claude routine ──MCP──▶  Worker + D1  ◀──REST──  Flutter app
 | `set_day_info` | Replace the day's headline and info sections: `headline?`, `sections: [{title, body}]`. Call with nothing to clear. |
 | `list_tasks` | One plan's tasks (A unless `plan` is given) with ids, `done` flags and check-off times (`completed`), plus `plans` showing which plans exist. Done tasks also carry `completed_at` and `late_min`, and the plan a `timing` summary (see below). |
 | `get_history` | The last `days` (default 7, max 31) ending at `through` (default today): each day's tasks with done / missed and check-off times, for the plan he followed (the one with more check-offs, A on a tie) plus `other_plan` totals, with the same per-task fields and `timing` summary. How the routine sees what slipped. |
+| `get_habits` | How he actually works: statistics computed from his check-offs over the last `days` finished days (default 28, 7 to 90), plus the habit note and its `versions`. Pass `version` to read an older note. |
+| `set_habits` | Save a new version of the habit note (max 6000 characters). The last 10 versions are kept. |
 | `add_task` | Append one task to a plan (`plan?`, A by default). |
 | `update_task` | Change title / tag / time / notes, or set `done`. Pass `null` to clear `start`, `minutes` or `notes`. |
 | `delete_task` | Remove a task. |
@@ -46,6 +48,22 @@ analysis only; the progress-site sync still orders changes by when the tick was 
 
 `ticked_in_bulk` is true when 3 or more tasks were checked off within 10 minutes. The time then says when he ticked,
 not when he did the work, so it should not be read as "behind". Each plan is measured against its own times.
+
+### Habits
+
+The scheduler learns from when he actually does things. `get_habits` returns two parts:
+
+- **`stats`** (facts, computed on the server): lateness by subject (median, average, share within 10 minutes of the
+  plan), when check-offs fall on weekdays vs weekends (first and last check-off, and morning / afternoon / evening / night
+  shares), and carry-over and misses by subject and by where a block sits in the day (first, middle, last).
+  Only finished days and the plan he followed count. Backfilled ticks and bulk-ticked days never feed a time figure.
+  A figure with too few samples is withheld and listed under `insufficient`, and `confidence` stays `low` until there are
+  5 finished days.
+- **`notes`** (interpretation, written by Claude): a short note saved with `set_habits`. Every save is a new version
+  (the last 10 are kept), so a bad rewrite can be rolled back by reading an old `version` and saving it again.
+
+The planner rules tell Claude when to read the statistics, how to apply them (pad by subject, schedule hard work where he
+really finishes things, move what keeps getting missed), and when it may write the note. There is nothing in the app for it.
 
 ### Plan A and Plan B
 
@@ -96,6 +114,7 @@ npm run db:migrate:remote   # 0002: time, length and notes on tasks (run once; e
 npm run db:info:remote      # 0003: headline + info sections (safe to repeat)
 npm run db:sync:remote      # 0004: site sync columns (run once; errors if already applied)
 npm run db:plans:remote     # 0005: Plan A / Plan B (run once; errors if already applied)
+npm run db:habits:remote    # 0006: habit notes (safe to repeat)
 npm run deploy
 ```
 

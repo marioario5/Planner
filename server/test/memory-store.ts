@@ -1,6 +1,8 @@
 import {
   normalizeTitle,
   type DayInfo,
+  type HabitNotes,
+  type HabitVersion,
   type NewTask,
   type Plan,
   type Task,
@@ -13,6 +15,8 @@ export class MemoryTaskStore implements TaskStore {
   private tasks: Task[] = [];
   private seq = 0;
   private info = new Map<string, DayInfo>();
+  private habits: HabitNotes[] = [];
+  private habitSeq = 0;
   /** Tests can pin the clock that stamps check-offs. */
   clock: () => number = () => Date.now();
 
@@ -89,6 +93,20 @@ export class MemoryTaskStore implements TaskStore {
     task.done = done;
     task.doneAt = atMs;
     task.completedAt = done ? new Date(atMs).toISOString() : null;
+  }
+
+  async saveHabitNotes(text: string): Promise<HabitNotes> {
+    const saved = { version: ++this.habitSeq, text, updatedAt: new Date(this.clock()).toISOString() };
+    this.habits = [saved, ...this.habits].slice(0, 10);
+    return saved;
+  }
+
+  async getHabitNotes(version?: number): Promise<HabitNotes | null> {
+    return (version === undefined ? this.habits[0] : this.habits.find((h) => h.version === version)) ?? null;
+  }
+
+  async listHabitVersions(): Promise<HabitVersion[]> {
+    return this.habits.map((h) => ({ version: h.version, updatedAt: h.updatedAt, chars: h.text.length }));
   }
 
   async getDayInfo(date: string): Promise<DayInfo> {

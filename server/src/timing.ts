@@ -52,6 +52,16 @@ export function isBackfilled(t: Task, timeZone: string): boolean {
 }
 
 /**
+ * Minutes after its planner day's local midnight that the task was really finished (1440+ = after
+ * midnight). null if not done or backfilled, since a backfilled tick says nothing about when.
+ */
+export function completedMinutes(t: Task, timeZone: string): number | null {
+  if (!t.done || !t.completedAt || isBackfilled(t, timeZone)) return null;
+  const p = localParts(t.completedAt, timeZone);
+  return (dayNumber(p.date) - dayNumber(t.date)) * 1440 + p.minutes;
+}
+
+/**
  * Minutes after its planned end that the task was checked off (negative = early).
  * null unless the task is done, has both a start and a length, and wasn't backfilled.
  */

@@ -25,3 +25,9 @@ CREATE TABLE IF NOT EXISTS day_info (
   sections   TEXT NOT NULL DEFAULT '[]', -- JSON: [{title, body, front}]
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS habit_notes (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT, -- the version number
+  notes      TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);

@@ -1,6 +1,8 @@
 import {
   normalizeTitle,
   type DayInfo,
+  type HabitNotes,
+  type HabitVersion,
   type NewTask,
   type Plan,
   type Tag,
@@ -196,6 +198,34 @@ export class D1TaskStore implements TaskStore {
       .prepare('UPDATE tasks SET done = ?, done_at = ?, completed_at = ? WHERE id = ?')
       .bind(done ? 1 : 0, atMs, done ? new Date(atMs).toISOString() : null, id)
       .run();
+  }
+
+  async saveHabitNotes(text: string): Promise<HabitNotes> {
+    const updatedAt = new Date().toISOString();
+    const result = await this.db
+      .prepare('INSERT INTO habit_notes (notes, created_at) VALUES (?, ?)')
+      .bind(text, updatedAt)
+      .run();
+    // Keep only the newest 10 versions.
+    await this.db
+      .prepare('DELETE FROM habit_notes WHERE id NOT IN (SELECT id FROM habit_notes ORDER BY id DESC LIMIT 10)')
+      .run();
+    return { version: Number(result.meta.last_row_id), text, updatedAt };
+  }
+
+  async getHabitNotes(version?: number): Promise<HabitNotes | null> {
+    const row = await (version === undefined
+      ? this.db.prepare('SELECT id, notes, created_at FROM habit_notes ORDER BY id DESC LIMIT 1')
+      : this.db.prepare('SELECT id, notes, created_at FROM habit_notes WHERE id = ?').bind(version)
+    ).first<{ id: number; notes: string; created_at: string }>();
+    return row ? { version: row.id, text: row.notes, updatedAt: row.created_at } : null;
+  }
+
+  async listHabitVersions(): Promise<HabitVersion[]> {
+    const { results } = await this.db
+      .prepare('SELECT id, created_at, LENGTH(notes) AS chars FROM habit_notes ORDER BY id DESC')
+      .all<{ id: number; created_at: string; chars: number }>();
+    return results.map((r) => ({ version: r.id, updatedAt: r.created_at, chars: r.chars }));
   }
 
   async getDayInfo(date: string): Promise<DayInfo> {
