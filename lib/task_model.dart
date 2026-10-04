@@ -1,4 +1,4 @@
-enum TaskTag { school, calculus3, sat, pcb, photography }
+enum TaskTag { school, calculus3, sat, pcb, photography, college, other }
 
 /// The planner's day starts at 4:00am, not midnight, because he works past midnight:
 /// 12:30am still belongs to the day that is ending. The server uses the same hour.
@@ -76,6 +76,8 @@ extension TaskTagLabel on TaskTag {
       case TaskTag.sat:         return 'sat';
       case TaskTag.pcb:         return 'pcb';
       case TaskTag.photography: return 'photo';
+      case TaskTag.college:     return 'college';
+      case TaskTag.other:       return 'other';
     }
   }
 }

@@ -30,7 +30,7 @@ Claude routine ──MCP──▶  Worker + D1  ◀──REST──  Flutter app
 | `update_task` | Change title / tag / time / notes, or set `done`. Pass `null` to clear `start`, `minutes` or `notes`. |
 | `delete_task` | Remove a task. |
 
-`tag` is one of `school`, `calculus3`, `sat`, `pcb`, `photography` (the app's colour tags; defaults to `school`).
+`tag` is one of `school`, `calculus3`, `sat`, `pcb`, `photography`, `college`, `other` (the app's colour tags; defaults to `school`).
 Each task can carry a time and detail, so titles stay short:
 
 - `start`: 24-hour `HH:MM` (e.g. `15:30`). Timed tasks are shown in clock order; untimed ones come last, in the order given.

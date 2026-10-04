@@ -17,6 +17,8 @@ const Color cSage        = Color(0xFF8BAF7C);
 const Color cAmber       = Color(0xFFD4A843);
 const Color cTeal        = Color(0xFF6C8EBF);
 const Color cLavender    = Color(0xFF9C7BBC );
+const Color cPlum       = Color(0xFFB5838D);
+const Color cStone      = Color(0xFFA39A8B);
 const Color cBg          = Color(0xFFC8B89A);
 const Color cBgDark      = Color(0xFFA8966E);
 
@@ -27,6 +29,8 @@ Color tagColor(TaskTag tag) {
     case TaskTag.sat:         return cLavender;
     case TaskTag.pcb:         return cTeal;
     case TaskTag.photography: return cSage;
+    case TaskTag.college:     return cPlum;
+    case TaskTag.other:       return cStone;
   }
 }
 

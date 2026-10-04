@@ -48,7 +48,7 @@ const INSTRUCTIONS =
 
 const TAG_HELP =
   'school = general schoolwork; calculus3 = Calculus 3 (homework, studying, quizzes); ' +
-  'sat = SAT prep; pcb = PCB design, assembly and debugging; photography = photography. ' +
+  'sat = SAT prep; pcb = PCB design, assembly and debugging; photography = photography; college = college applications, essays, recommenders and other admissions work; other = anything else that fits no subject (dinner, errands, admin). ' +
   "Defaults to school if omitted.";
 
 const dateProp = {

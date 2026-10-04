@@ -1,7 +1,7 @@
 // Task types, input validation, and the storage interface.
 // Validation lives here so the REST routes and the MCP tools reject the same things.
 
-export const TAGS = ['school', 'calculus3', 'sat', 'pcb', 'photography'] as const;
+export const TAGS = ['school', 'calculus3', 'sat', 'pcb', 'photography', 'college', 'other'] as const;
 export type Tag = (typeof TAGS)[number];
 
 /** A day can have two complete lists: Plan A (the normal day) and Plan B (the backup, e.g. a later start). */
