@@ -814,9 +814,13 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
     }
     case 'list_tasks': {
       const date = resolveDate(args.date, timeZone, now);
-      const plan = parsePlan(args.plan);
       const all = await store.list(date);
       await reconcile(store, all, ctx.sync);
+      // No plan asked for: show the one he followed (most checked off, A on a tie), or the only one that exists.
+      const totals = planTotals(all);
+      const plan = args.plan === undefined || args.plan === null
+        ? (totals.length ? totals.reduce((best, p) => (p.done > best.done ? p : best)).plan : 'A')
+        : parsePlan(args.plan);
       return { ...summarize(date, plan, all.filter((t) => t.plan === plan), timeZone), plans: planTotals(all) };
     }
     case 'get_history':

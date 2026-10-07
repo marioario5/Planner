@@ -1214,7 +1214,9 @@ describe('plan A and plan B', () => {
     await plan('A', ['Same title']);
     const b = await plan('B', ['Same title']);
     await tool('update_task', { id: b.data.tasks[0].id, done: true });
-    expect((await tool('list_tasks', {})).data.done).toBe(0);
+    // no plan asked for: the one he followed (B has the tick); A explicitly still has none
+    expect((await tool('list_tasks', {})).data.plan).toBe('B');
+    expect((await tool('list_tasks', { plan: 'A' })).data.done).toBe(0);
     expect((await tool('list_tasks', { plan: 'B' })).data.done).toBe(1);
     await tool('add_task', { plan: 'B', title: 'B extra' });
     expect((await tool('list_tasks', { plan: 'B' })).data.total).toBe(2);
