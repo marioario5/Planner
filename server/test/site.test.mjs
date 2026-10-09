@@ -5,6 +5,8 @@ import vm from 'node:vm';
 import { buildSite, validateConfig } from '../../site/build-lib.mjs';
 import { decryptBlob, fromBase64, IV_BYTES, PBKDF2_ITERATIONS, SALT_BYTES } from '../../site/src/crypto.mjs';
 import { encryptBlob } from '../../site/encrypt.mjs';
+import { iconLinks, iconPixels, iconPng } from '../../site/icon.mjs';
+import { inflateSync } from 'node:zlib';
 import {
   canFinish,
   dropAction,
@@ -208,6 +210,38 @@ describe('site: trays', () => {
   });
 });
 
+describe('site: tab icon', () => {
+  it('writes valid PNG files at the sizes the tab and the home screen use', () => {
+    for (const size of [32, 180]) {
+      const png = iconPng(size);
+      expect([...png.subarray(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+      expect(png.readUInt32BE(16)).toBe(size); // IHDR width
+      expect(png.readUInt32BE(20)).toBe(size); // IHDR height
+      expect(png[25]).toBe(6); // RGBA
+      const idatAt = png.indexOf('IDAT');
+      const idatLen = png.readUInt32BE(idatAt - 4);
+      const raw = inflateSync(png.subarray(idatAt + 4, idatAt + 4 + idatLen));
+      expect(raw.length).toBe((size * 4 + 1) * size); // one filter byte + RGBA pixels per row
+    }
+  });
+
+  it('draws the printer: tan corners, a paper sheet at the bottom, opaque everywhere', () => {
+    const px = iconPixels(16);
+    const at = (x, y) => [...px.subarray((y * 16 + x) * 4, (y * 16 + x) * 4 + 4)];
+    expect(at(0, 0)).toEqual([200, 184, 154, 255]); // tan background
+    expect(at(7, 12)).toEqual([255, 248, 238, 255]); // paper
+    expect(at(5, 4)).toEqual([107, 80, 64, 255]); // printer body
+    for (let i = 3; i < px.length; i += 4) expect(px[i]).toBe(255);
+  });
+
+  it('puts the icon links in both the lock page and the planner', () => {
+    const links = iconLinks();
+    expect(links).toContain('rel="icon"');
+    expect(links).toContain('rel="apple-touch-icon"');
+    expect(links).toContain('data:image/png;base64,');
+  });
+});
+
 describe('site: server calls', () => {
   const fake = (responder) => {
     const calls = [];
@@ -312,6 +346,7 @@ describe('site: the build and the locked page', () => {
     const visible = html.replace(/<script[\s\S]*?<\/script>/g, '').replace(/<style[\s\S]*?<\/style>/g, '');
     expect(visible).not.toMatch(/unlock|password|login|sign in|secret/i);
     expect(html).toContain('<title>Search</title>');
+    expect(html).toContain('rel="icon"');
     expect(html).not.toMatch(/<!--/);
   });
 
@@ -320,6 +355,7 @@ describe('site: the build and the locked page', () => {
     expect(appHtml).toContain(TOKEN);
     expect(appHtml).toContain('HOW DID TODAY FEEL?');
     expect(appHtml).toContain('function createApi');
+    expect(appHtml).toContain('rel="icon"');
     expect(appHtml).not.toMatch(/^export /m);
   });
 

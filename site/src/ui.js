@@ -334,7 +334,7 @@
     var stopBtn = tray === 'current' && canStop(task)
       ? h('button', { class: 'stop', 'aria-label': 'Reset start', onclick: function (e) { e.stopPropagation(); stopTask(task.id); } }, h('i'))
       : null;
-    var showFlag = tray === 'current' || open || task.flagged;
+    var showFlag = true; // every slip carries its flag
 
     var el = h('div', {
       class: 'slip' + (tray === 'done' ? ' done' : '') + (task.flagged ? ' flagged' : '') + (popId === task.id ? ' pop' : ''),

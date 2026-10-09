@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decryptBlob } from './src/crypto.mjs';
 import { encryptBlob } from './encrypt.mjs';
+import { iconLinks } from './icon.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const read = (rel) => readFileSync(join(here, rel), 'utf8');
@@ -72,6 +73,8 @@ export async function buildSite({ url, token, password }) {
     // the daily verse is optional
   }
   let appHtml = read('src/app.html');
+  const icon = iconLinks();
+  appHtml = insert(appHtml, '__ICON__', icon);
   appHtml = insert(appHtml, '__CFG__', cfg);
   appHtml = insert(appHtml, '__VIBES__', JSON.stringify(vibes).replace(/</g, '\\u003c'));
   appHtml = insert(appHtml, '__APP_JS__', appJs);
@@ -82,6 +85,7 @@ export async function buildSite({ url, token, password }) {
 
   const unlockJs = withoutLineComments(asScript(read('src/crypto.mjs'), 'crypto.mjs'));
   let html = read('src/shell.html');
+  html = insert(html, '__ICON__', icon);
   html = insert(html, '__UNLOCK_JS__', unlockJs);
   html = insert(html, '__PRINTER_JS__', printer);
   html = insert(html, '__BLOB__', blob);
