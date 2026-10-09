@@ -1170,10 +1170,10 @@ class _TaskRowState extends State<_TaskRow> with SingleTickerProviderStateMixin 
               ),
             ),
             const SizedBox(width: 2),
-            // The flag, and right under it (only once Start has been pressed) a stop button that resets the start.
+            // The flag, and right under it (only while a started task is still running) a stop button that resets the start.
             Column(mainAxisSize: MainAxisSize.min, children: [
               _HoldFlag(flagged: task.flagged, onHeld: widget.onFlag),
-              if (task.startedAt != null)
+              if (task.startedAt != null && !task.done)
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: widget.onResetStart,
