@@ -15,6 +15,32 @@ export interface Env {
   FIREBASE_STATE_URL?: string;
   /** Comma-separated site task id prefixes to mirror. Default `calc3-`. */
   SYNC_PREFIXES?: string;
+  /** Comma-separated web origins allowed to call /api from a browser (the planner website). Default: the GitHub Pages site. */
+  ALLOWED_ORIGINS?: string;
+}
+
+const DEFAULT_ALLOWED_ORIGINS = 'https://marioario5.github.io';
+
+function allowedOrigins(env: Pick<Env, 'ALLOWED_ORIGINS'>): string[] {
+  return (env.ALLOWED_ORIGINS ?? DEFAULT_ALLOWED_ORIGINS)
+    .split(',')
+    .map((o) => o.trim())
+    .filter(Boolean);
+}
+
+const isApiPath = (path: string) => path === '/api/rating' || path === '/api/tasks' || path.startsWith('/api/tasks/');
+
+/**
+ * Lets the planner website (a different origin) call the app API. Only origins on the allow list get CORS headers, so
+ * any other site's browser is blocked from reading responses. The bearer token is still required for every real call.
+ */
+function withCors(request: Request, env: Pick<Env, 'ALLOWED_ORIGINS'>, response: Response): Response {
+  const origin = request.headers.get('Origin');
+  if (!origin || !allowedOrigins(env).includes(origin)) return response;
+  const out = new Response(response.body, response);
+  out.headers.set('Access-Control-Allow-Origin', origin);
+  out.headers.set('Vary', 'Origin');
+  return out;
 }
 
 const DEFAULT_TZ = 'America/Los_Angeles';
@@ -50,6 +76,31 @@ const apiView = (t: Task) => ({
  *   DELETE /api/tasks/:id
  */
 export async function handleRequest(
+  request: Request,
+  env: Pick<Env, 'API_TOKEN' | 'PLANNER_TZ' | 'ALLOWED_ORIGINS'>,
+  store: TaskStore,
+  now?: Date,
+  sync?: SyncConfig,
+): Promise<Response> {
+  const path = new URL(request.url).pathname.replace(/\/+$/, '') || '/';
+  if (!isApiPath(path)) return handleInner(request, env, store, now, sync);
+
+  if (request.method === 'OPTIONS') {
+    // Browser preflight: no credentials are sent on it, so it is answered before authentication.
+    const preflight = new Response(null, {
+      status: 204,
+      headers: {
+        'Access-Control-Allow-Methods': 'GET, PATCH, PUT, DELETE, OPTIONS',
+        'Access-Control-Allow-Headers': 'Authorization, Content-Type',
+        'Access-Control-Max-Age': '86400',
+      },
+    });
+    return withCors(request, env, preflight);
+  }
+  return withCors(request, env, await handleInner(request, env, store, now, sync));
+}
+
+async function handleInner(
   request: Request,
   env: Pick<Env, 'API_TOKEN' | 'PLANNER_TZ'>,
   store: TaskStore,

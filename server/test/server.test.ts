@@ -1456,3 +1456,55 @@ describe('experiments tool', () => {
     expect((await set([{ ...base, id: 'f', tag: 'gym' }])).isError).toBe(true);
   });
 });
+
+describe('CORS for the planner website', () => {
+  const SITE = 'https://marioario5.github.io';
+  const send = (path: string, init: RequestInit = {}, withToken = true) => {
+    const headers = new Headers(init.headers);
+    if (withToken) headers.set('Authorization', `Bearer ${TOKEN}`);
+    return handleRequest(new Request(BASE + path, { ...init, headers }), env, store, NOW);
+  };
+
+  it('answers a preflight from the site without a token, and lists what it allows', async () => {
+    const res = await send('/api/tasks/abc', { method: 'OPTIONS', headers: { Origin: SITE, 'Access-Control-Request-Method': 'PATCH' } }, false);
+    expect(res.status).toBe(204);
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe(SITE);
+    expect(res.headers.get('Access-Control-Allow-Methods')).toContain('PATCH');
+    expect(res.headers.get('Access-Control-Allow-Headers')).toContain('Authorization');
+  });
+
+  it('adds the origin header to real responses (also errors) for the site, and not for other sites', async () => {
+    const ok = await send('/api/tasks', { headers: { Origin: SITE } });
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get('Access-Control-Allow-Origin')).toBe(SITE);
+    const denied = await send('/api/tasks', { headers: { Origin: SITE } }, false);
+    expect(denied.status).toBe(401);
+    expect(denied.headers.get('Access-Control-Allow-Origin')).toBe(SITE);
+
+    const other = await send('/api/tasks', { headers: { Origin: 'https://evil.example' } });
+    expect(other.headers.get('Access-Control-Allow-Origin')).toBeNull();
+    const otherPre = await send('/api/tasks', { method: 'OPTIONS', headers: { Origin: 'https://evil.example' } }, false);
+    expect(otherPre.headers.get('Access-Control-Allow-Origin')).toBeNull();
+    expect((await send('/api/tasks')).headers.get('Access-Control-Allow-Origin')).toBeNull(); // no Origin: the phone app
+  });
+
+  it('keeps the rating endpoint and MCP out of the open: rating gets CORS, the token is still required', async () => {
+    const res = await send('/api/rating', { method: 'PUT', headers: { Origin: SITE }, body: JSON.stringify({ rating: 3 }) });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe(SITE);
+    const noToken = await send('/api/rating', { method: 'PUT', headers: { Origin: SITE }, body: '{}' }, false);
+    expect(noToken.status).toBe(401);
+    const mcp = await send('/mcp', { method: 'OPTIONS', headers: { Origin: SITE } }, false);
+    expect(mcp.headers.get('Access-Control-Allow-Origin')).toBeNull();
+  });
+
+  it('can be pointed at other origins with ALLOWED_ORIGINS', async () => {
+    const res = await handleRequest(
+      new Request(BASE + '/api/tasks', { headers: { Authorization: `Bearer ${TOKEN}`, Origin: 'http://127.0.0.1:8080' } }),
+      { ...env, ALLOWED_ORIGINS: 'http://127.0.0.1:8080, https://marioario5.github.io' },
+      store,
+      NOW,
+    );
+    expect(res.headers.get('Access-Control-Allow-Origin')).toBe('http://127.0.0.1:8080');
+  });
+});
