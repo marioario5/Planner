@@ -221,7 +221,7 @@ const TOOLS = [
       '`insufficient`, and `confidence` is "low" until there are 5 finished days, so do not write habits from thin data. ' +
       '`notes` is the habit note you maintain with set_habits (null if none yet) and `versions` lists the saved versions; ' +
       'pass `version` to read an older note instead. `stats.capacity` is what a day of his can actually hold (plan to it); ' +
-      '`stats.duration_by_tag` and `stats.start_delay` come from blocks where he pressed Start; `stats.ratings` is how his days felt; ' +
+      '`stats.duration_by_tag` and `stats.start_delay` come from blocks where he pressed Start; `stats.week_load` says how heavy the last 7 days were (level normal/elevated/heavy, with reasons); `stats.ratings` is how his days felt; ' +
       '`experiments` are the deliberate changes being tried, each compared before and after (see set_experiments).',
     inputSchema: {
       type: 'object',

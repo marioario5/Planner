@@ -152,6 +152,8 @@ export interface HabitStats {
   start_delay: { n: number; median_min: number; avg_min: number } | null;
   /** What a day of his can actually hold: the honest budget to plan against. Work blocks only (not dinner or wrap-up). */
   capacity: { weekday: Capacity | null; weekend: Capacity | null };
+  /** How heavy the last 7 days were, with the plain-language reasons. Use it to keep a week from getting too heavy. */
+  week_load: WeekLoad;
   /** How his days felt (1 rough to 5 great), over the finished days in the window. */
   ratings: { n: number; avg: number; recent: { date: string; rating: number }[] } | null;
   data_quality: {
@@ -170,6 +172,34 @@ interface Duration {
   /** actual / planned: 1.4 means blocks take 40% longer than planned. */
   median_ratio: number;
 }
+
+export interface WeekLoad {
+  /** Finished days with a plan among the last 7. */
+  days: number;
+  /** Work minutes (not dinner or wrap-up) asked of him per day, and actually finished per day. */
+  planned_minutes_per_day: number;
+  done_minutes_per_day: number;
+  /** The usual finished work minutes on a day over the whole window, the yardstick for the figures below. */
+  typical_done_minutes: number | null;
+  days_above_typical: number;
+  /** Days whose last trustworthy check-off was at or after 23:00: a sleep cost. */
+  late_finish_days: number;
+  /** Share of the week's work blocks not finished on their own day. */
+  missed_or_carried_pct: number;
+  level: 'unknown' | 'normal' | 'elevated' | 'heavy';
+  /** Why the level is what it is, each with its numbers. Empty when normal. */
+  reasons: string[];
+  note: string;
+}
+
+// A week counts as heavier when these hold; two reasons = heavy, one = elevated.
+const WEEK_DAYS = 7;
+const WEEK_MIN_DAYS = 4;
+const SUSTAINED_DAYS = 5; // worked more than his typical amount on this many days
+const LATE_FINISH_MINUTES = 23 * 60;
+const LATE_FINISH_DAYS = 3;
+const OVERASKED_RATIO = 1.5; // planned per day vs typical finished per day...
+const OVERASKED_MISSED_PCT = 30; // ...while at least this much was not finished on its day
 
 interface Capacity {
   days: number;
@@ -358,6 +388,68 @@ export function computeHabits(
     };
   };
 
+  // --- how heavy the last week was ---
+  const doneWorkMinutes = (d: FinishedDay) =>
+    d.tasks.filter((t) => isWork(t) && t.done && !isBackfilled(t, timeZone)).reduce((n, t) => n + (t.minutes ?? 0), 0);
+  const typicalDone = days.length ? median(days.map(doneWorkMinutes)) : null;
+  const weekDays = days.filter((d) => d.date >= shiftDate(today, -WEEK_DAYS) && d.tasks.some(isWork));
+  const weekLoad = ((): WeekLoad => {
+    const work = weekDays.flatMap((d) => d.tasks.filter(isWork));
+    const base = {
+      days: weekDays.length,
+      planned_minutes_per_day: 0,
+      done_minutes_per_day: 0,
+      typical_done_minutes: typicalDone,
+      days_above_typical: 0,
+      late_finish_days: 0,
+      missed_or_carried_pct: 0,
+    };
+    if (weekDays.length < WEEK_MIN_DAYS || typicalDone === null) {
+      return {
+        ...base,
+        level: 'unknown',
+        reasons: [],
+        note: `Only ${weekDays.length} finished day(s) in the last ${WEEK_DAYS} (need ${WEEK_MIN_DAYS}+): can't tell how heavy the week was.`,
+      };
+    }
+    const plannedPerDay = Math.round(work.reduce((n, t) => n + (t.minutes ?? 0), 0) / weekDays.length);
+    const donePerDay = Math.round(weekDays.reduce((n, d) => n + doneWorkMinutes(d), 0) / weekDays.length);
+    const above = weekDays.filter((d) => doneWorkMinutes(d) > typicalDone).length;
+    const lateDays = weekDays.filter((d) => {
+      const finished = d.tasks.map((t) => completedMinutes(t, timeZone, d.bulkIds)).filter((m): m is number => m !== null);
+      return finished.length > 0 && Math.max(...finished) >= LATE_FINISH_MINUTES;
+    }).length;
+    const notDone = work.filter((t) => !t.done || isBackfilled(t, timeZone)).length;
+    const missedPct = work.length ? pct(notDone, work.length) : 0;
+
+    const reasons: string[] = [];
+    if (above >= SUSTAINED_DAYS) {
+      reasons.push(`worked more than his typical ${typicalDone} min on ${above} of ${weekDays.length} days`);
+    }
+    if (lateDays >= LATE_FINISH_DAYS) {
+      reasons.push(`last check-off at or after 23:00 on ${lateDays} of ${weekDays.length} days (sleep cost)`);
+    }
+    if (typicalDone > 0 && plannedPerDay >= OVERASKED_RATIO * typicalDone && missedPct >= OVERASKED_MISSED_PCT) {
+      reasons.push(`asked for ~${plannedPerDay} min a day but finishes ~${donePerDay}; ${missedPct}% of blocks missed or carried over`);
+    }
+    const level = reasons.length >= 2 ? 'heavy' : reasons.length === 1 ? 'elevated' : 'normal';
+    return {
+      days: weekDays.length,
+      planned_minutes_per_day: plannedPerDay,
+      done_minutes_per_day: donePerDay,
+      typical_done_minutes: typicalDone,
+      days_above_typical: above,
+      late_finish_days: lateDays,
+      missed_or_carried_pct: missedPct,
+      level,
+      reasons,
+      note:
+        level === 'normal'
+          ? 'The last week looks sustainable.'
+          : 'A heavy or elevated week is a reason to lighten days that have no required work (see the rules); it never cuts required work.',
+    };
+  })();
+
   // --- how the days felt ---
   const rated = [...ratings.entries()].filter(([date]) => date >= from && date <= through).sort(([a], [b]) => (a < b ? -1 : 1));
   const ratingStats = rated.length
@@ -382,6 +474,7 @@ export function computeHabits(
     duration_by_tag,
     start_delay,
     capacity: { weekday: capacityOf(false), weekend: capacityOf(true) },
+    week_load: weekLoad,
     ratings: ratingStats,
     best_times: { weekday: profile(false), weekend: profile(true) },
     carry_over: {

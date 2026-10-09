@@ -348,3 +348,76 @@ describe('experiments compare before and after', () => {
     expect(v.before).toBeUndefined();
   });
 });
+
+describe('week load (how heavy the last 7 days were)', () => {
+  // TODAY is 2026-10-20, so the week is Oct 13 to Oct 19.
+  const WEEK = ['2026-10-13', '2026-10-14', '2026-10-15', '2026-10-16', '2026-10-17', '2026-10-18', '2026-10-19'];
+
+  it('is heavy when days run late and far more is asked than he finishes', () => {
+    // 5 blocks of 60 min a day (300 asked); only 2 finish, the second ticked at 23:30
+    const tasks = WEEK.flatMap((date) => [
+      task({ date, start: '16:00', minutes: 60, tick: '17:30' }),
+      task({ date, start: '17:00', minutes: 60, tick: '23:30' }),
+      task({ date, start: '18:00', minutes: 60 }),
+      task({ date, start: '19:00', minutes: 60 }),
+      task({ date, start: '20:00', minutes: 60 }),
+    ]);
+    const w = computeHabits(tasks, TZ, TODAY).week_load;
+    expect(w).toMatchObject({
+      days: 7,
+      planned_minutes_per_day: 300,
+      done_minutes_per_day: 120,
+      typical_done_minutes: 120,
+      late_finish_days: 7,
+      missed_or_carried_pct: 60,
+      level: 'heavy',
+    });
+    expect(w.reasons).toHaveLength(2);
+    expect(w.reasons[0]).toContain('23:00');
+    expect(w.reasons[1]).toContain('300');
+  });
+
+  it('is normal when the day is finished early and the plan matches what he does', () => {
+    const tasks = WEEK.flatMap((date) => [
+      task({ date, start: '16:00', minutes: 45, tick: '16:50' }),
+      task({ date, start: '17:00', minutes: 45, tick: '17:50' }),
+      task({ date, start: '18:00', minutes: 45, tick: '18:50' }),
+    ]);
+    const w = computeHabits(tasks, TZ, TODAY).week_load;
+    expect(w).toMatchObject({ level: 'normal', late_finish_days: 0, missed_or_carried_pct: 0, reasons: [] });
+  });
+
+  it('is elevated with a single reason', () => {
+    const tasks = WEEK.map((date, i) => task({ date, start: '16:00', minutes: 60, tick: i < 4 ? '23:30' : '17:30' }));
+    const w = computeHabits(tasks, TZ, TODAY).week_load;
+    expect(w.level).toBe('elevated');
+    expect(w.late_finish_days).toBe(4);
+    expect(w.reasons).toHaveLength(1);
+  });
+
+  it('flags a week clearly above his earlier baseline (more than typical on 5+ days)', () => {
+    const light = ['2026-10-01', '2026-10-02', '2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-09', '2026-10-12'].map(
+      (date) => task({ date, start: '16:00', minutes: 30, tick: '16:40' }),
+    );
+    const busy = WEEK.map((date) => task({ date, start: '16:00', minutes: 120, tick: '18:10' }));
+    const w = computeHabits([...light, ...busy], TZ, TODAY).week_load;
+    expect(w.days_above_typical).toBe(7);
+    expect(w.level).toBe('elevated');
+    expect(w.reasons[0]).toContain('more than his typical 30 min');
+  });
+
+  it('says it cannot tell with fewer than 4 finished days, and ignores dinner and wrap-up', () => {
+    const few = WEEK.slice(0, 3).map((date) => task({ date, tick: '16:00' }));
+    expect(computeHabits(few, TZ, TODAY).week_load).toMatchObject({ level: 'unknown', reasons: [] });
+    const onlyOther = WEEK.map((date) => task({ date, tag: 'other', tick: '23:45' }));
+    expect(computeHabits(onlyOther, TZ, TODAY).week_load.level).toBe('unknown'); // no work blocks at all
+  });
+
+  it('does not count batch-ticked or flagged late ticks as late nights', () => {
+    const tasks = WEEK.flatMap((date) => [
+      task({ date, start: '16:00', minutes: 60, tick: '17:30' }),
+      task({ date, start: '17:00', minutes: 60, tick: '23:30', flagged: true }),
+    ]);
+    expect(computeHabits(tasks, TZ, TODAY).week_load.late_finish_days).toBe(0);
+  });
+});
