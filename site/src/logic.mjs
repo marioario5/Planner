@@ -154,6 +154,78 @@ export function parseSectionBody(body) {
   });
 }
 
+// ---- trays ----------------------------------------------------------------------------------------------------
+// A task sits in one of three trays: To do, Current or Done.
+//   done                                   -> done
+//   started (running)                      -> current
+//   pulled into Current but not started    -> current (the "focus" list, kept on this device)
+//   anything else                          -> todo
+// Pulling a slip into Current only expands it; START is a separate press, FINISH moves it to Done by itself.
+
+export function trayOf(task, focusIds) {
+  if (task.done) return 'done';
+  if (task.startedAt) return 'current';
+  return focusIds.has(task.id) ? 'current' : 'todo';
+}
+
+/**
+ * Splits one plan's tasks into the three trays. To do and Done keep the planned order; Current lists running tasks first
+ * (earliest start first), then the ones pulled in but not started, in the order they were pulled.
+ */
+export function splitTrays(tasks, focusOrder) {
+  const focusIds = new Set(focusOrder);
+  const out = { todo: [], current: [], done: [] };
+  for (const t of tasks) out[trayOf(t, focusIds)].push(t);
+  const running = out.current.filter((t) => t.startedAt).sort((a, b) => (a.startedAt < b.startedAt ? -1 : 1));
+  const waiting = focusOrder.map((id) => out.current.find((t) => t.id === id && !t.startedAt)).filter(Boolean);
+  out.current = [...running, ...waiting];
+  return out;
+}
+
+/** The next thing: the first task in planned order that is still in To do. Not the one for the time of day. */
+export function nextUp(tasks, focusOrder) {
+  const focusIds = new Set(focusOrder);
+  return tasks.find((t) => trayOf(t, focusIds) === 'todo') ?? null;
+}
+
+/**
+ * What dropping a slip on a tray does, or null for nothing. 'blocked-running' means the slip is running and must be
+ * stopped with its stop button first (so a drag can't throw away a start time).
+ *   pull        To do -> Current: expands it, no start
+ *   putback     Current (not started) -> To do
+ *   finish      anything not done -> Done: ticks it (from Current with a timer if it was started)
+ *   redo        Done -> To do: unticks it, so it starts over
+ *   redo-focus  Done -> Current: unticks it and puts it up for starting
+ */
+export function dropAction(task, toTray, focusIds) {
+  const from = trayOf(task, focusIds);
+  if (toTray === from) return null;
+  const running = phase(task) === 'running';
+  if (toTray === 'current') return from === 'done' ? 'redo-focus' : running ? null : 'pull';
+  if (toTray === 'todo') return from === 'done' ? 'redo' : running ? 'blocked-running' : 'putback';
+  if (toTray === 'done') return 'finish';
+  return null;
+}
+
+/** Splits a block's notes into labelled rows: "Start: ...", "If-then: ...", "Method: ...", "Stop: ...", "Why: ...". */
+const NOTE_LABEL_RE = /^(Start|If-then|Method|Stop|Why):\s*(.*)$/;
+export function parseNotes(notes) {
+  if (!notes) return [];
+  return notes
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .map((line) => {
+      const m = NOTE_LABEL_RE.exec(line.trim());
+      return m ? { label: m[1], text: m[2] } : { label: null, text: line.trim() };
+    });
+}
+
+/** Minutes since an ISO time, or null. */
+export function minutesSince(iso, now = Date.now()) {
+  const t = new Date(iso).getTime();
+  return Number.isNaN(t) ? null : Math.max(0, Math.floor((now - t) / 60000));
+}
+
 /** The server calls. `fetchImpl` is injected so tests can fake the network. */
 export function createApi({ baseUrl, token, fetchImpl, timeoutMs = 15000 }) {
   const root = baseUrl.replace(/\/+$/, '');

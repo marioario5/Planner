@@ -4,6 +4,20 @@ The same planner as the phone app, in a browser, for when you don't have your ph
 everything stays in sync: ticks, Start/Finish/stop, flags and the day rating. It refreshes by itself every 20 seconds
 and whenever you come back to the tab.
 
+## How it works
+
+Three trays hold the day's paper slips: **To do**, **Current** and **Done**. Plan A and Plan B are tabs at the top, and
+switching them swaps the slips in all three trays.
+
+- **Pull a slip into Current** (drag it, tap its PULL button, or tap the **Next up** ticket on the rack at the top right).
+  It opens by itself so you can read the whole "how to start". Pulling does not start it: press START yourself.
+- **Next up** is the first task still in To do in the plan's order, not the one for the time of day. You can pull any slip
+  in any order; the To do tray keeps the planned order with the next one on top.
+- **FINISH** moves the slip to Done by itself. You can also drag any slip onto Done to tick it, or drag a done slip back to
+  To do (or tap REDO) to start it over. A running slip can't be dragged back: use its stop button.
+- The flag (hold 2 seconds) and the stop button work as in the phone app, and the day rating and info sheets are at the bottom.
+- Slips you pulled in but haven't started are remembered on this device only. Started and finished slips sync everywhere.
+
 ## How the lock works
 
 The page that gets served is only a plain search box and an encrypted blob. The planner itself (its code, the server

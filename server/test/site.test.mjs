@@ -7,6 +7,12 @@ import { decryptBlob, fromBase64, IV_BYTES, PBKDF2_ITERATIONS, SALT_BYTES } from
 import { encryptBlob } from '../../site/encrypt.mjs';
 import {
   canFinish,
+  dropAction,
+  minutesSince,
+  nextUp,
+  parseNotes,
+  splitTrays,
+  trayOf,
   canStart,
   canStop,
   choosePlan,
@@ -126,6 +132,79 @@ describe('site: helpers', () => {
       { kind: 'text', text: 'plain line' },
       { kind: 'check', text: 'water' },
     ]);
+  });
+});
+
+describe('site: trays', () => {
+  const mk = (id, over = {}) => task({ id, title: id, ...over });
+  const plan = [mk('a'), mk('b'), mk('c'), mk('d')];
+
+  it('puts each task in the right tray', () => {
+    const focus = new Set(['b']);
+    expect(trayOf(mk('a'), focus)).toBe('todo');
+    expect(trayOf(mk('b'), focus)).toBe('current'); // pulled in, not started
+    expect(trayOf(mk('c', { started: T0 }), focus)).toBe('current'); // running
+    expect(trayOf(mk('d', { done: true }), focus)).toBe('done');
+    expect(trayOf(mk('d', { done: true, started: T0 }), new Set(['d']))).toBe('done'); // done wins over focus
+  });
+
+  it('splits a plan: planned order in To do, running first then pulled-in order in Current', () => {
+    const tasks = [mk('a'), mk('b', { started: T0 }), mk('c'), mk('d'), mk('e', { done: true }), mk('f', { started: '2026-10-08T22:00:00.000Z' })];
+    const t = splitTrays(tasks, ['d', 'c']);
+    expect(t.todo.map((x) => x.id)).toEqual(['a']);
+    expect(t.current.map((x) => x.id)).toEqual(['f', 'b', 'd', 'c']); // running by start time, then pulled order
+    expect(t.done.map((x) => x.id)).toEqual(['e']);
+  });
+
+  it('next up is the first task still in To do, whatever the clock says, and moves on when it is pulled', () => {
+    expect(nextUp(plan, []).id).toBe('a');
+    expect(nextUp(plan, ['a']).id).toBe('b');
+    expect(nextUp([mk('a', { done: true }), mk('b'), mk('c')], ['b']).id).toBe('c');
+    expect(nextUp([mk('a', { started: T0 })], [])).toBeNull();
+    expect(nextUp([], [])).toBeNull();
+  });
+
+  it('out of order: pulling a later slip leaves the first one on top of To do', () => {
+    const t = splitTrays(plan, ['c']);
+    expect(t.todo.map((x) => x.id)).toEqual(['a', 'b', 'd']);
+    expect(nextUp(plan, ['c']).id).toBe('a');
+  });
+
+  it('what dropping on a tray does', () => {
+    const none = new Set();
+    const focused = new Set(['f']);
+    const idle = mk('i');
+    const waiting = mk('f');
+    const running = mk('r', { started: T0 });
+    const done = mk('d', { done: true });
+    expect(dropAction(idle, 'current', none)).toBe('pull');
+    expect(dropAction(waiting, 'todo', focused)).toBe('putback');
+    expect(dropAction(waiting, 'current', focused)).toBeNull();
+    expect(dropAction(idle, 'done', none)).toBe('finish');
+    expect(dropAction(waiting, 'done', focused)).toBe('finish');
+    expect(dropAction(running, 'done', none)).toBe('finish');
+    expect(dropAction(running, 'todo', none)).toBe('blocked-running'); // would throw away the start
+    expect(dropAction(running, 'current', none)).toBeNull();
+    expect(dropAction(done, 'todo', none)).toBe('redo');
+    expect(dropAction(done, 'current', none)).toBe('redo-focus');
+    expect(dropAction(done, 'done', none)).toBeNull();
+    expect(dropAction(idle, 'todo', none)).toBeNull();
+  });
+
+  it('splits notes into labelled rows and keeps unlabelled lines', () => {
+    expect(parseNotes('Start: open the sheet.\nIf-then: if 3:30, then go.\nplain\n\nWhy: due tomorrow.')).toEqual([
+      { label: 'Start', text: 'open the sheet.' },
+      { label: 'If-then', text: 'if 3:30, then go.' },
+      { label: null, text: 'plain' },
+      { label: 'Why', text: 'due tomorrow.' },
+    ]);
+    expect(parseNotes(null)).toEqual([]);
+  });
+
+  it('counts minutes since a start', () => {
+    expect(minutesSince(T0, Date.parse(T0) + 12 * 60000 + 5000)).toBe(12);
+    expect(minutesSince(T0, Date.parse(T0) - 5000)).toBe(0);
+    expect(minutesSince('nope')).toBeNull();
   });
 });
 
