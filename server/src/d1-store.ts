@@ -199,6 +199,8 @@ export class D1TaskStore implements TaskStore {
     if (patch.done !== undefined) {
       sets.push('done = ?', 'completed_at = ?', 'done_at = ?');
       values.push(patch.done ? 1 : 0, patch.done ? new Date().toISOString() : null, Date.now());
+      // Unticking starts the task over: forget the Start press (unless the same patch sets one).
+      if (!patch.done && patch.started === undefined) sets.push('started_at = NULL');
     }
     if (patch.started !== undefined) {
       // Keep the first press: starting twice does not move the start.
@@ -234,7 +236,7 @@ export class D1TaskStore implements TaskStore {
 
   async setDoneFromSite(id: string, done: boolean, atMs: number): Promise<void> {
     await this.db
-      .prepare('UPDATE tasks SET done = ?, done_at = ?, completed_at = ? WHERE id = ?')
+      .prepare(`UPDATE tasks SET done = ?, done_at = ?, completed_at = ?${done ? '' : ', started_at = NULL'} WHERE id = ?`)
       .bind(done ? 1 : 0, atMs, done ? new Date(atMs).toISOString() : null, id)
       .run();
   }

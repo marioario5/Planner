@@ -1392,6 +1392,21 @@ describe('start button, flag and day rating (app API)', () => {
     expect((api as any).tasks[0]).toMatchObject({ flagged: true, started: expect.any(String) });
   });
 
+  it('unticking a task starts it over: the Start press is cleared, a flag stays', async () => {
+    const id = await makeTask();
+    store.clock = () => at(16, 20);
+    await patch(id, { started: true });
+    await patch(id, { flagged: true });
+    store.clock = () => at(17, 0);
+    await patch(id, { done: true });
+    expect((await tool('list_tasks', {})).data.tasks[0].done).toBe(true);
+    const undone = await patch(id, { done: false });
+    expect(undone.data).toMatchObject({ done: false, started: null, flagged: true });
+    // pressing Start again after that begins a fresh timer
+    store.clock = () => at(18, 0);
+    expect((await patch(id, { started: true })).data.started).toBe('2026-10-02T01:00:00.000Z');
+  });
+
   it('rejects a non-boolean started or flagged', async () => {
     const id = await makeTask();
     expect((await patch(id, { started: 'yes' })).status).toBe(400);

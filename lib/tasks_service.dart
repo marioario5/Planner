@@ -152,8 +152,9 @@ class TasksService {
     }
   }
 
+  /// Unticking also clears the Start press, so the task starts over.
   static Future<bool> setTaskCompleted(Task task, bool completed) =>
-      _patchTask(task, {'done': completed});
+      _patchTask(task, {'done': completed, if (!completed) 'started': false});
 
   /// Records (or clears) the moment he pressed Start. The server keeps the first press.
   static Future<bool> setTaskStarted(Task task, bool started) =>

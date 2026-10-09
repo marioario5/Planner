@@ -231,7 +231,12 @@ class _PlannerScreenState extends State<PlannerScreen>
   Future<void> _toggleTask(Task task) async {
     HapticFeedback.lightImpact();
     final newDone = !task.done;
-    setState(() => task.done = newDone);
+    final startedBefore = task.startedAt;
+    setState(() {
+      task.done = newDone;
+      // Unticking starts the task over: the old Start press goes with it, so START shows again.
+      if (!newDone) task.startedAt = null;
+    });
 
     final ok = await TasksService.setTaskCompleted(task, newDone);
     if (!ok && mounted) {
@@ -239,6 +244,7 @@ class _PlannerScreenState extends State<PlannerScreen>
       // doesn't claim it's synced when it isn't.
       setState(() {
         task.done = !newDone;
+        task.startedAt = startedBefore;
         _error = "Couldn't sync that change";
       });
     }
@@ -428,9 +434,17 @@ class _PlannerScreenState extends State<PlannerScreen>
       _headline  = plan.headline;
       _sections  = plan.sections;
       _printed   = true;
-      // Keep the plan he was on if it still exists; otherwise A, or B if A is empty.
-      final hasA = _tasks.any((t) => t.plan == 'A');
-      if (!_tasks.any((t) => t.plan == _plan)) _plan = hasA || !_hasPlanB ? 'A' : 'B';
+      // Open the plan he is actually following: the one with more check-offs. On a tie (including
+      // nothing ticked yet) keep the plan he was on if it still exists; otherwise A, or B if A is empty.
+      int doneIn(String p) => _tasks.where((t) => t.plan == p && t.done).length;
+      final doneA = doneIn('A');
+      final doneB = doneIn('B');
+      if (doneA != doneB) {
+        _plan = doneB > doneA ? 'B' : 'A';
+      } else if (!_tasks.any((t) => t.plan == _plan)) {
+        final hasA = _tasks.any((t) => t.plan == 'A');
+        _plan = hasA || !_hasPlanB ? 'A' : 'B';
+      }
     });
 
     _feedController.reset();
