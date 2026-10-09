@@ -5,11 +5,21 @@
 //  - only finished days (before today) count, and only the plan he followed on each day
 //  - backfilled ticks never feed a time measurement (their time isn't when the work happened)
 //  - tasks he ticked in a batch (3+ within 10 minutes) never feed a time measurement; the rest of that day still counts
+//  - tasks he flagged (forgot to start or finish on time) never feed a time measurement either
+//  - real durations only come from blocks where he pressed Start; everything else is a tick time, not a duration
 //  - a figure is reported only with enough samples; otherwise it is listed as insufficient
 
 import { shiftDate } from './dates';
-import { PLANS, type Plan, type Task } from './tasks';
-import { bulkTickedIds, completedMinutes, isBackfilled, lateMinutes } from './timing';
+import { PLANS, type Experiment, type Plan, type Tag, type Task } from './tasks';
+import {
+  actualMinutes,
+  bulkTickedIds,
+  completedMinutes,
+  isBackfilled,
+  isFlagged,
+  lateMinutes,
+  startDelayMinutes,
+} from './timing';
 
 export const DEFAULT_WINDOW_DAYS = 28;
 export const MAX_WINDOW_DAYS = 90;
@@ -28,6 +38,10 @@ const median = (xs: number[]): number => {
 };
 const mean = (xs: number[]): number => Math.round(xs.reduce((a, b) => a + b, 0) / xs.length);
 const pct = (part: number, whole: number): number => Math.round((100 * part) / whole);
+const percentile = (xs: number[], p: number): number => {
+  const s = [...xs].sort((a, b) => a - b);
+  return s[Math.max(0, Math.ceil(p * s.length) - 1)];
+};
 
 /** Minutes since local midnight of the planner day -> "HH:MM", with "(+1)" once it is past midnight. */
 function clock(minutes: number): string {
@@ -132,27 +146,80 @@ export interface HabitStats {
     by_tag: Record<string, Outcome>;
     by_position: Record<string, Outcome>;
   };
-  data_quality: { days_ticked_in_bulk: number; bulk_ticked_tasks: number; backfilled_tasks: number };
+  /** Real durations, from blocks where he pressed Start (a tick alone says nothing about how long it took). */
+  duration_by_tag: Record<string, Duration>;
+  /** How long after the planned start he pressed Start; null until there are enough Start presses. */
+  start_delay: { n: number; median_min: number; avg_min: number } | null;
+  /** What a day of his can actually hold: the honest budget to plan against. Work blocks only (not dinner or wrap-up). */
+  capacity: { weekday: Capacity | null; weekend: Capacity | null };
+  /** How his days felt (1 rough to 5 great), over the finished days in the window. */
+  ratings: { n: number; avg: number; recent: { date: string; rating: number }[] } | null;
+  data_quality: {
+    days_ticked_in_bulk: number;
+    bulk_ticked_tasks: number;
+    backfilled_tasks: number;
+    flagged_tasks: number;
+    tasks_with_start_press: number;
+  };
+}
+
+interface Duration {
+  n: number;
+  median_planned_min: number;
+  median_actual_min: number;
+  /** actual / planned: 1.4 means blocks take 40% longer than planned. */
+  median_ratio: number;
+}
+
+interface Capacity {
+  days: number;
+  median_planned_blocks: number;
+  median_done_blocks: number;
+  median_planned_minutes: number;
+  /** Minutes of the blocks he finished on their own day: the typical day's real load. */
+  median_done_minutes: number;
+  /** A good day (75th percentile): the ceiling to plan as "if time allows", never as the base. */
+  good_day_done_minutes: number;
+  done_on_day_pct: number;
 }
 
 /**
  * `all` is every task in the window (any plan); `today` is the current planner day. Only days before
  * today are measured, because today's unfinished tasks aren't misses yet.
  */
-export function computeHabits(all: Task[], timeZone: string, today: string, windowDays = DEFAULT_WINDOW_DAYS): HabitStats {
-  const from = shiftDate(today, -windowDays);
-  const through = shiftDate(today, -1);
+interface FinishedDay {
+  date: string;
+  tasks: Task[];
+  bulkIds: Set<string>;
+}
 
+/** Finished days from..through, each reduced to the plan he followed. */
+export function finishedDays(all: Task[], timeZone: string, from: string, through: string): FinishedDay[] {
   const byDate = new Map<string, Task[]>();
   for (const t of all) {
     if (t.date < from || t.date > through) continue;
     byDate.set(t.date, [...(byDate.get(t.date) ?? []), t]);
   }
-  const days = [...byDate.entries()]
+  return [...byDate.entries()]
     .sort(([a], [b]) => (a < b ? -1 : 1))
     .map(([date, dayTasks]) => ({ date, tasks: followedTasks(dayTasks) }))
     .filter((d) => d.tasks.length > 0)
     .map((d) => ({ ...d, bulkIds: bulkTickedIds(d.tasks, timeZone) }));
+}
+
+/** Work blocks: everything except dinner, errands and the nightly wrap-up. */
+const isWork = (t: Task) => t.tag !== 'other';
+
+export function computeHabits(
+  all: Task[],
+  timeZone: string,
+  today: string,
+  windowDays = DEFAULT_WINDOW_DAYS,
+  ratings: Map<string, number> = new Map(),
+): HabitStats {
+  const from = shiftDate(today, -windowDays);
+  const through = shiftDate(today, -1);
+  const days = finishedDays(all, timeZone, from, through);
 
   const insufficient: HabitStats['insufficient'] = [];
 
@@ -233,6 +300,74 @@ export function computeHabits(all: Task[], timeZone: string, today: string, wind
     else if (tasks.length > 0) insufficient.push({ measure: 'carry_over_by_position', key: position, n: tasks.length });
   }
 
+  // --- real durations (only blocks where he pressed Start) ---
+  const duration_by_tag: Record<string, Duration> = {};
+  const startedRows = days.flatMap((d) =>
+    d.tasks.map((t) => ({ t, actual: actualMinutes(t, timeZone, d.bulkIds) })).filter((x) => x.actual !== null && x.t.minutes),
+  ) as { t: Task; actual: number }[];
+  for (const tag of [...new Set(startedRows.map((x) => x.t.tag))].sort()) {
+    const mine = startedRows.filter((x) => x.t.tag === tag);
+    if (mine.length < MIN_TAG_SAMPLES) {
+      insufficient.push({ measure: 'duration', key: tag, n: mine.length });
+      continue;
+    }
+    const planned = median(mine.map((x) => x.t.minutes!));
+    const actual = median(mine.map((x) => x.actual));
+    duration_by_tag[tag] = {
+      n: mine.length,
+      median_planned_min: planned,
+      median_actual_min: actual,
+      median_ratio: Math.round(100 * median(mine.map((x) => x.actual / x.t.minutes!))) / 100,
+    };
+  }
+  const delays = days.flatMap((d) => d.tasks.map((t) => startDelayMinutes(t, timeZone)).filter((n): n is number => n !== null));
+  if (delays.length > 0 && delays.length < MIN_TAG_SAMPLES) insufficient.push({ measure: 'start_delay', key: 'all', n: delays.length });
+  const start_delay =
+    delays.length >= MIN_TAG_SAMPLES ? { n: delays.length, median_min: median(delays), avg_min: mean(delays) } : null;
+
+  // --- capacity: what a day can actually hold ---
+  const capacityOf = (weekend: boolean): Capacity | null => {
+    const group = days.filter((d) => isWeekend(d.date) === weekend);
+    const rows = group
+      .map((d) => {
+        const work = d.tasks.filter(isWork);
+        const doneOnDay = work.filter((t) => t.done && !isBackfilled(t, timeZone));
+        return {
+          planned: work.length,
+          done: doneOnDay.length,
+          plannedMin: work.reduce((n, t) => n + (t.minutes ?? 0), 0),
+          doneMin: doneOnDay.reduce((n, t) => n + (t.minutes ?? 0), 0),
+        };
+      })
+      .filter((r) => r.planned > 0);
+    if (rows.length < MIN_PROFILE_DAYS) {
+      insufficient.push({ measure: `capacity_${weekend ? 'weekend' : 'weekday'}`, key: 'days', n: rows.length });
+      return null;
+    }
+    return {
+      days: rows.length,
+      median_planned_blocks: median(rows.map((r) => r.planned)),
+      median_done_blocks: median(rows.map((r) => r.done)),
+      median_planned_minutes: median(rows.map((r) => r.plannedMin)),
+      median_done_minutes: median(rows.map((r) => r.doneMin)),
+      good_day_done_minutes: percentile(rows.map((r) => r.doneMin), 0.75),
+      done_on_day_pct: pct(
+        rows.reduce((n, r) => n + r.done, 0),
+        rows.reduce((n, r) => n + r.planned, 0),
+      ),
+    };
+  };
+
+  // --- how the days felt ---
+  const rated = [...ratings.entries()].filter(([date]) => date >= from && date <= through).sort(([a], [b]) => (a < b ? -1 : 1));
+  const ratingStats = rated.length
+    ? {
+        n: rated.length,
+        avg: Math.round((10 * rated.reduce((n, [, r]) => n + r, 0)) / rated.length) / 10,
+        recent: rated.slice(-7).map(([date, rating]) => ({ date, rating })),
+      }
+    : null;
+
   const confidence = days.length >= MIN_DAYS_FOR_CONFIDENCE ? 'ok' : 'low';
   return {
     window: { from, through, days_with_tasks: days.length },
@@ -244,6 +379,10 @@ export function computeHabits(all: Task[], timeZone: string, today: string, wind
     lateness_by_tag,
     lateness_overall: lateAll.length >= MIN_TAG_SAMPLES ? latenessOf(lateAll) : null,
     insufficient,
+    duration_by_tag,
+    start_delay,
+    capacity: { weekday: capacityOf(false), weekend: capacityOf(true) },
+    ratings: ratingStats,
     best_times: { weekday: profile(false), weekend: profile(true) },
     carry_over: {
       overall: everyTask.length ? outcomeOf(everyTask, timeZone) : null,
@@ -254,6 +393,97 @@ export function computeHabits(all: Task[], timeZone: string, today: string, wind
       days_ticked_in_bulk: days.filter((d) => d.bulkIds.size > 0).length,
       bulk_ticked_tasks: days.reduce((n, d) => n + d.bulkIds.size, 0),
       backfilled_tasks: everyTask.filter((t) => isBackfilled(t, timeZone)).length,
+      flagged_tasks: everyTask.filter(isFlagged).length,
+      tasks_with_start_press: everyTask.filter((t) => t.startedAt !== null).length,
     },
   };
+}
+
+// ---------------------------------------------------------------------------------------------------------------
+// Experiments: one deliberate change at a time, compared before and after.
+
+const BEFORE_DAYS = 14;
+const MIN_EXPERIMENT_DAYS = 3;
+
+interface Side {
+  days: number;
+  done_on_day_pct: number | null;
+  median_late_min: number | null;
+  blocks_done_per_day: number | null;
+  avg_rating: number | null;
+}
+
+export interface ExperimentView {
+  id: string;
+  title: string;
+  change: string;
+  measure: Experiment['measure'];
+  tag: Tag | null;
+  started_on: string;
+  status: Experiment['status'];
+  result: string | null;
+  /** Finished days since it started (running ones only). */
+  days_since_start?: number;
+  before?: Side;
+  after?: Side;
+  /** The one number this experiment was meant to move, before vs after. */
+  focus?: { metric: string; before: number | null; after: number | null };
+  note?: string;
+}
+
+function sideOf(days: FinishedDay[], tag: Tag | null, timeZone: string, ratings: Map<string, number>): Side {
+  const rows = days
+    .map((d) => ({ d, tasks: d.tasks.filter((t) => (tag ? t.tag === tag : isWork(t))) }))
+    .filter((r) => r.tasks.length > 0);
+  const tasks = rows.flatMap((r) => r.tasks);
+  const late = rows.flatMap((r) => r.tasks.map((t) => lateMinutes(t, timeZone, r.d.bulkIds)).filter((n): n is number => n !== null));
+  const rates = rows.map((r) => ratings.get(r.d.date)).filter((n): n is number => n !== undefined);
+  const doneOnDay = tasks.filter((t) => t.done && !isBackfilled(t, timeZone)).length;
+  return {
+    days: rows.length,
+    done_on_day_pct: tasks.length ? pct(doneOnDay, tasks.length) : null,
+    median_late_min: late.length >= MIN_TAG_SAMPLES ? median(late) : null,
+    blocks_done_per_day: rows.length ? Math.round((10 * doneOnDay) / rows.length) / 10 : null,
+    avg_rating: rates.length ? Math.round((10 * rates.reduce((a, b) => a + b, 0)) / rates.length) / 10 : null,
+  };
+}
+
+/** `all` must reach back far enough to cover the 14 days before the earliest running experiment. */
+export function evaluateExperiments(
+  all: Task[],
+  ratings: Map<string, number>,
+  experiments: Experiment[],
+  timeZone: string,
+  today: string,
+): ExperimentView[] {
+  const through = shiftDate(today, -1);
+  return experiments.map((e) => {
+    const base: ExperimentView = {
+      id: e.id,
+      title: e.title,
+      change: e.change,
+      measure: e.measure,
+      tag: e.tag,
+      started_on: e.startedOn,
+      status: e.status,
+      result: e.result,
+    };
+    if (e.status !== 'running') return base;
+
+    const before = sideOf(finishedDays(all, timeZone, shiftDate(e.startedOn, -BEFORE_DAYS), shiftDate(e.startedOn, -1)), e.tag, timeZone, ratings);
+    const after = sideOf(finishedDays(all, timeZone, e.startedOn, through), e.tag, timeZone, ratings);
+    const key = { done_pct: 'done_on_day_pct', lateness: 'median_late_min', blocks_done: 'blocks_done_per_day', rating: 'avg_rating' } as const;
+    const metric = key[e.measure];
+    const ready = before.days >= MIN_EXPERIMENT_DAYS && after.days >= MIN_EXPERIMENT_DAYS;
+    return {
+      ...base,
+      days_since_start: after.days,
+      before,
+      after,
+      focus: { metric, before: before[metric], after: after[metric] },
+      note: ready
+        ? 'Enough days on both sides to compare. Still a handful of days, so call it a lean, not a proof; change one thing at a time.'
+        : `Too early to judge: need ${MIN_EXPERIMENT_DAYS}+ finished days on each side (have ${before.days} before, ${after.days} after).`,
+    };
+  });
 }

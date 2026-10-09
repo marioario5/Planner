@@ -19,6 +19,7 @@ const Color cTeal        = Color(0xFF6C8EBF);
 const Color cLavender    = Color(0xFF9C7BBC );
 const Color cPlum       = Color(0xFFB5838D);
 const Color cStone      = Color(0xFFA39A8B);
+const Color cFlag        = Color(0xFFF2C94C);
 const Color cBg          = Color(0xFFC8B89A);
 const Color cBgDark      = Color(0xFFA8966E);
 
@@ -147,6 +148,7 @@ class _PlannerScreenState extends State<PlannerScreen>
   List<InfoSection> _sections = [];
   String _plan = 'A';                // which plan is showing
   Set<String> _ticks = {};           // ticked checklist items, "Section|item"
+  int? _rating;                      // how today felt, 1-5
 
   List<Task> get _planTasks => _tasks.where((t) => t.plan == _plan).toList();
   bool get _hasPlanB => _tasks.any((t) => t.plan == 'B');
@@ -237,6 +239,46 @@ class _PlannerScreenState extends State<PlannerScreen>
       // doesn't claim it's synced when it isn't.
       setState(() {
         task.done = !newDone;
+        _error = "Couldn't sync that change";
+      });
+    }
+  }
+
+  /// Pressing Start records when he really began, so the planner learns how long blocks take.
+  Future<void> _startTask(Task task) async {
+    HapticFeedback.mediumImpact();
+    setState(() => task.startedAt = DateTime.now());
+    final ok = await TasksService.setTaskStarted(task, true);
+    if (!ok && mounted) {
+      setState(() {
+        task.startedAt = null;
+        _error = "Couldn't sync that change";
+      });
+    }
+  }
+
+  /// Held for two seconds (see _HoldFlag): marks the task's times as unreliable, or clears the mark.
+  Future<void> _toggleFlag(Task task) async {
+    final flagged = !task.flagged;
+    setState(() => task.flagged = flagged);
+    final ok = await TasksService.setTaskFlagged(task, flagged);
+    if (!ok && mounted) {
+      setState(() {
+        task.flagged = !flagged;
+        _error = "Couldn't sync that change";
+      });
+    }
+  }
+
+  Future<void> _setRating(int value) async {
+    HapticFeedback.selectionClick();
+    final before = _rating;
+    final next = before == value ? null : value; // tap the same one again to clear
+    setState(() => _rating = next);
+    final ok = await TasksService.setRating(next);
+    if (!ok && mounted) {
+      setState(() {
+        _rating = before;
         _error = "Couldn't sync that change";
       });
     }
@@ -368,6 +410,7 @@ class _PlannerScreenState extends State<PlannerScreen>
     setState(() {
       _loading   = false;
       _tasks     = plan.tasks;
+      _rating    = plan.rating;
       _headline  = plan.headline;
       _sections  = plan.sections;
       _printed   = true;
@@ -654,6 +697,8 @@ class _PlannerScreenState extends State<PlannerScreen>
           children: tasks.map((t) => _TaskRow(
             task: t,
             onToggle: () => _toggleTask(t),
+            onStart: () => _startTask(t),
+            onFlag: () => _toggleFlag(t),
             onDelete: () => _deleteTask(t),
           )).toList(),
         ),
@@ -705,7 +750,50 @@ class _PlannerScreenState extends State<PlannerScreen>
               style: GoogleFonts.pressStart2p(
                   fontSize: 5, color: cSage))),
         ],
+        const SizedBox(height: 14),
+        _dashedDivider(),
+        const SizedBox(height: 10),
+        _ratingRow(),
+        const SizedBox(height: 10),
+        Text('forgot to start or finish on time?\nhold the flag 2 seconds',
+            textAlign: TextAlign.center,
+            style: _px(5, cInkLight.withValues(alpha: 0.7), height: 1.8)),
       ],
+    ]);
+  }
+
+  /// "How was today?": five squares, 1 (rough) to 5 (great). Tap the chosen one again to clear it.
+  Widget _ratingRow() {
+    return Column(children: [
+      Text('HOW WAS TODAY?', style: _px(5, cInkLight, letterSpacing: 0.5)),
+      const SizedBox(height: 8),
+      Row(
+        mainAxisAlignment: MainAxisAlignment.center,
+        children: List.generate(5, (i) {
+          final n = i + 1;
+          final picked = _rating == n;
+          return GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: () => _setRating(n),
+            child: Container(
+              width: 26,
+              height: 26,
+              margin: const EdgeInsets.symmetric(horizontal: 4),
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: picked ? cInk : cPaper,
+                border: Border.all(color: cInk, width: 2),
+              ),
+              child: Text('$n', style: _px(7, picked ? cPaper : cInk, height: 1)),
+            ),
+          );
+        }),
+      ),
+      const SizedBox(height: 6),
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Text('rough', style: _px(4, cInkLight.withValues(alpha: 0.7))),
+        Text('great', style: _px(4, cInkLight.withValues(alpha: 0.7))),
+      ]),
     ]);
   }
 
@@ -862,15 +950,90 @@ class _PlannerScreenState extends State<PlannerScreen>
 class _TaskRow extends StatefulWidget {
   final Task task;
   final VoidCallback onToggle;
+  final VoidCallback onStart;
+  final VoidCallback onFlag;
   final VoidCallback onDelete;
-  const _TaskRow({required this.task, required this.onToggle, required this.onDelete});
+  const _TaskRow({
+    required this.task,
+    required this.onToggle,
+    required this.onStart,
+    required this.onFlag,
+    required this.onDelete,
+  });
 
   @override
   State<_TaskRow> createState() => _TaskRowState();
 }
 
-class _TaskRowState extends State<_TaskRow> {
+class _TaskRowState extends State<_TaskRow> with SingleTickerProviderStateMixin {
   bool _showNotes = false;
+
+  /// Pulses the row yellow while it is flagged.
+  late final AnimationController _pulse = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1100),
+  );
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.task.flagged) _pulse.repeat(reverse: true);
+  }
+
+  @override
+  void didUpdateWidget(covariant _TaskRow old) {
+    super.didUpdateWidget(old);
+    if (widget.task.flagged && !_pulse.isAnimating) {
+      _pulse.repeat(reverse: true);
+    } else if (!widget.task.flagged && _pulse.isAnimating) {
+      _pulse.stop();
+      _pulse.value = 0;
+    }
+  }
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  /// Start / Finish under the title: Start records when he really began; Finish ticks it off.
+  Widget _startFinish(Task task) {
+    if (task.done) {
+      final label = task.startedLabel;
+      if (label == null) return const SizedBox.shrink();
+      return Padding(
+        padding: const EdgeInsets.only(top: 3),
+        child: Text('started $label',
+            style: _px(5, cInkLight.withValues(alpha: 0.6), height: 1.6)),
+      );
+    }
+    final started = task.startedAt != null;
+    final color = tagColor(task.tag);
+    return Padding(
+      padding: const EdgeInsets.only(top: 5),
+      child: Row(children: [
+        GestureDetector(
+          behavior: HitTestBehavior.opaque,
+          onTap: started ? widget.onToggle : widget.onStart,
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            decoration: BoxDecoration(
+              color: started ? color : cPaper,
+              border: Border.all(color: color, width: 2),
+            ),
+            child: Text(started ? 'FINISH' : 'START',
+                style: _px(5, started ? Colors.white : color, height: 1.2, letterSpacing: 0.5)),
+          ),
+        ),
+        if (started) ...[
+          const SizedBox(width: 6),
+          Text('since ${task.startedLabel}',
+              style: _px(5, cInkLight, height: 1.2)),
+        ],
+      ]),
+    );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -893,7 +1056,15 @@ class _TaskRowState extends State<_TaskRow> {
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
         onTap: widget.onToggle,
-        child: Padding(
+        child: AnimatedBuilder(
+          animation: _pulse,
+          builder: (context, child) => Container(
+            color: task.flagged
+                ? cFlag.withValues(alpha: 0.12 + 0.28 * _pulse.value)
+                : Colors.transparent,
+            child: child,
+          ),
+          child: Padding(
           padding: const EdgeInsets.symmetric(vertical: 5),
           child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
             Container(
@@ -934,6 +1105,13 @@ class _TaskRowState extends State<_TaskRow> {
                       decorationColor: dim,
                     ),
                   ),
+                  if (task.flagged)
+                    Padding(
+                      padding: const EdgeInsets.only(top: 3),
+                      child: Text('FLAGGED: times ignored',
+                          style: _px(5, const Color(0xFF8A6A00), height: 1.6)),
+                    ),
+                  _startFinish(task),
                   if (hasNotes)
                     GestureDetector(
                       behavior: HitTestBehavior.opaque,
@@ -974,8 +1152,74 @@ class _TaskRowState extends State<_TaskRow> {
                     fontSize: 5, color: tagColor(task.tag), letterSpacing: 0.5),
               ),
             ),
+            const SizedBox(width: 2),
+            _HoldFlag(flagged: task.flagged, onHeld: widget.onFlag),
           ]),
         ),
+        ),
+      ),
+    );
+  }
+}
+
+/// A flag in the corner of a task. It has to be held for two seconds (a ring fills while you hold), so a
+/// stray tap can't set it. Flagged tasks pulse yellow; holding again clears the flag.
+class _HoldFlag extends StatefulWidget {
+  final bool flagged;
+  final VoidCallback onHeld;
+  const _HoldFlag({required this.flagged, required this.onHeld});
+
+  @override
+  State<_HoldFlag> createState() => _HoldFlagState();
+}
+
+class _HoldFlagState extends State<_HoldFlag> with SingleTickerProviderStateMixin {
+  late final AnimationController _hold = AnimationController(
+    vsync: this,
+    duration: const Duration(seconds: 2),
+  )..addStatusListener((status) {
+      if (status == AnimationStatus.completed) {
+        HapticFeedback.heavyImpact();
+        widget.onHeld();
+        _hold.reset();
+      }
+    });
+
+  @override
+  void dispose() {
+    _hold.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTapDown: (_) {
+        HapticFeedback.selectionClick();
+        _hold.forward(from: 0);
+      },
+      onTapUp: (_) => _hold.reset(),
+      onTapCancel: () => _hold.reset(),
+      child: SizedBox(
+        width: 28,
+        height: 28,
+        child: Stack(alignment: Alignment.center, children: [
+          AnimatedBuilder(
+            animation: _hold,
+            builder: (context, _) => SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                value: _hold.value,
+                strokeWidth: 2,
+                color: cFlag,
+                backgroundColor: Colors.transparent,
+              ),
+            ),
+          ),
+          Icon(Icons.flag, size: 13, color: widget.flagged ? const Color(0xFFD9A400) : cInkLight.withValues(alpha: 0.45)),
+        ]),
       ),
     );
   }

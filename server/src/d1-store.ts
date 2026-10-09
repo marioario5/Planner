@@ -1,6 +1,9 @@
 import {
   normalizeTitle,
   type Commitment,
+  type Experiment,
+  type ExperimentMeasure,
+  type ExperimentStatus,
   type CommitmentStatus,
   type UserNote,
   type UserNoteKind,
@@ -34,6 +37,8 @@ interface Row {
   position: number;
   created_at: string;
   completed_at: string | null;
+  started_at: string | null;
+  flagged_at: string | null;
 }
 
 function toTask(row: Row): Task {
@@ -53,14 +58,16 @@ function toTask(row: Row): Task {
     position: row.position,
     createdAt: row.created_at,
     completedAt: row.completed_at,
+    startedAt: row.started_at ?? null,
+    flaggedAt: row.flagged_at ?? null,
   };
 }
 
 const newId = () => crypto.randomUUID().slice(0, 8);
 
 const INSERT = `INSERT INTO tasks
-  (id, date, plan, commitment_id, title, tag, start_time, minutes, notes, site_key, done, done_at, position, created_at, completed_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  (id, date, plan, commitment_id, title, tag, start_time, minutes, notes, site_key, done, done_at, position, created_at, completed_at, started_at, flagged_at)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 export class D1TaskStore implements TaskStore {
   constructor(private readonly db: D1Database) {}
@@ -114,6 +121,8 @@ export class D1TaskStore implements TaskStore {
         position,
         new Date().toISOString(),
         null,
+        null,
+        null,
       )
       .run();
     return (await this.get(id))!;
@@ -151,6 +160,8 @@ export class D1TaskStore implements TaskStore {
             position,
             now,
             done ? (old?.completedAt ?? now) : null,
+            old?.startedAt ?? null,
+            old?.flaggedAt ?? null,
           ),
       );
     });
@@ -188,6 +199,23 @@ export class D1TaskStore implements TaskStore {
     if (patch.done !== undefined) {
       sets.push('done = ?', 'completed_at = ?', 'done_at = ?');
       values.push(patch.done ? 1 : 0, patch.done ? new Date().toISOString() : null, Date.now());
+    }
+    if (patch.started !== undefined) {
+      // Keep the first press: starting twice does not move the start.
+      if (patch.started) {
+        sets.push('started_at = COALESCE(started_at, ?)');
+        values.push(new Date().toISOString());
+      } else {
+        sets.push('started_at = NULL');
+      }
+    }
+    if (patch.flagged !== undefined) {
+      if (patch.flagged) {
+        sets.push('flagged_at = COALESCE(flagged_at, ?)');
+        values.push(new Date().toISOString());
+      } else {
+        sets.push('flagged_at = NULL');
+      }
     }
     if (sets.length === 0) return this.get(id);
 
@@ -355,6 +383,72 @@ export class D1TaskStore implements TaskStore {
       .prepare('SELECT id, created_at, LENGTH(notes) AS chars FROM habit_notes ORDER BY id DESC')
       .all<{ id: number; created_at: string; chars: number }>();
     return results.map((r) => ({ version: r.id, updatedAt: r.created_at, chars: r.chars }));
+  }
+
+  async getRating(date: string): Promise<number | null> {
+    const row = await this.db.prepare('SELECT rating FROM day_ratings WHERE date = ?').bind(date).first<{ rating: number }>();
+    return row?.rating ?? null;
+  }
+
+  async setRating(date: string, rating: number | null): Promise<void> {
+    if (rating === null) {
+      await this.db.prepare('DELETE FROM day_ratings WHERE date = ?').bind(date).run();
+      return;
+    }
+    await this.db
+      .prepare(
+        `INSERT INTO day_ratings (date, rating, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT(date) DO UPDATE SET rating = excluded.rating, updated_at = excluded.updated_at`,
+      )
+      .bind(date, rating, new Date().toISOString())
+      .run();
+  }
+
+  async listRatings(from: string, to: string): Promise<Map<string, number>> {
+    const { results } = await this.db
+      .prepare('SELECT date, rating FROM day_ratings WHERE date >= ? AND date <= ?')
+      .bind(from, to)
+      .all<{ date: string; rating: number }>();
+    return new Map(results.map((r) => [r.date, r.rating]));
+  }
+
+  async listExperiments(): Promise<Experiment[]> {
+    const { results } = await this.db
+      .prepare('SELECT * FROM experiments ORDER BY started_on DESC, id')
+      .all<{
+        id: string; title: string; change: string; measure: string; tag: string | null; started_on: string;
+        status: string; result: string | null; updated_at: string;
+      }>();
+    return results.map((r) => ({
+      id: r.id,
+      title: r.title,
+      change: r.change,
+      measure: r.measure as ExperimentMeasure,
+      tag: r.tag as Tag | null,
+      startedOn: r.started_on,
+      status: r.status as ExperimentStatus,
+      result: r.result,
+      updatedAt: r.updated_at,
+    }));
+  }
+
+  async saveExperiment(e: Experiment): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO experiments (id, title, change, measure, tag, started_on, status, result, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           title = excluded.title, change = excluded.change, measure = excluded.measure, tag = excluded.tag,
+           started_on = excluded.started_on, status = excluded.status, result = excluded.result,
+           updated_at = excluded.updated_at`,
+      )
+      .bind(e.id, e.title, e.change, e.measure, e.tag, e.startedOn, e.status, e.result, e.updatedAt)
+      .run();
+  }
+
+  async deleteExperiment(id: string): Promise<boolean> {
+    const result = await this.db.prepare('DELETE FROM experiments WHERE id = ?').bind(id).run();
+    return result.meta.changes > 0;
   }
 
   async getDayInfo(date: string): Promise<DayInfo> {

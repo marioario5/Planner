@@ -15,7 +15,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   done_at      INTEGER,                       -- epoch ms of the last done toggle (either way)
   position     INTEGER NOT NULL DEFAULT 0,
   created_at   TEXT NOT NULL,
-  completed_at TEXT
+  completed_at TEXT,
+  started_at   TEXT,                          -- when he pressed Start
+  flagged_at   TEXT                           -- he flagged this task's times as unreliable
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_date ON tasks (date, position);
@@ -69,4 +71,22 @@ CREATE TABLE IF NOT EXISTS user_notes (
   confirmed_on TEXT NOT NULL,
   status       TEXT NOT NULL DEFAULT 'active',
   updated_at   TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS day_ratings (
+  date       TEXT PRIMARY KEY,
+  rating     INTEGER NOT NULL,                -- 1 (rough) to 5 (great)
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS experiments (
+  id         TEXT PRIMARY KEY,
+  title      TEXT NOT NULL,
+  change     TEXT NOT NULL,
+  measure    TEXT NOT NULL,                   -- done_pct | lateness | blocks_done | rating
+  tag        TEXT,
+  started_on TEXT NOT NULL,
+  status     TEXT NOT NULL DEFAULT 'running', -- running | kept | dropped
+  result     TEXT,
+  updated_at TEXT NOT NULL
 );

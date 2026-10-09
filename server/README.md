@@ -8,7 +8,7 @@ Claude routine ──MCP──▶  Worker + D1  ◀──REST──  Flutter app
 ```
 
 - **MCP endpoint** (`/mcp`): Claude publishes the day's list and can read back what's checked off.
-- **REST API** (`/api/tasks`): what the phone app uses. Check-offs are stored, so Claude sees them too.
+- **REST API** (`/api/tasks`, `/api/rating`): what the phone app uses. Check-offs, Start presses, flags (a task whose times are wrong) and the day's 1 to 5 rating are stored, so Claude sees them too.
 
 ## MCP tools
 
@@ -19,6 +19,7 @@ Claude routine ──MCP──▶  Worker + D1  ◀──REST──  Flutter app
 | `list_tasks` | One plan's tasks (A unless `plan` is given) with ids, `done` flags and check-off times (`completed`), plus `plans` showing which plans exist. Done tasks also carry `completed_at` and `late_min`, and the plan a `timing` summary (see below). |
 | `get_history` | The last `days` (default 7, max 31) ending at `through` (default today): each day's tasks with done / missed and check-off times, for the plan he followed (the one with more check-offs, A on a tie) plus `other_plan` totals, with the same per-task fields and `timing` summary. How the routine sees what slipped. |
 | `get_habits` | How he actually works: statistics computed from his check-offs over the last `days` finished days (default 28, 7 to 90), plus the habit note and its `versions`. Pass `version` to read an older note. |
+| `set_experiments` | Start, update or close an experiment: one deliberate change to how days are planned, with the measure it should move. `get_habits` shows each running one compared before and after (max 3 running). |
 | `set_habits` | Save a new version of the habit note (max 6000 characters). The last 10 versions are kept. |
 | `get_framework` | The month-ahead framework: a short list of suggestions from earlier runs (flagged and due-soon items, deferrals, recent choices, and whether a review is due). `all: true` adds every open item. |
 | `set_commitments` | Add or change framework items (max 25 open), close them (`done` / `dropped`), and stamp a light review with `reviewed: true`. |
@@ -163,6 +164,7 @@ npm run db:plans:remote     # 0005: Plan A / Plan B (run once; errors if already
 npm run db:habits:remote    # 0006: habit notes (safe to repeat)
 npm run db:framework:remote # 0007: framework tables + tasks.commitment_id (the ALTER errors if already applied)
 npm run db:notes:remote     # 0008: user notes (safe to repeat)
+npm run db:start:remote     # 0009: Start press, flag, day rating, experiments (the two ALTERs error if already applied)
 npm run deploy
 ```
 

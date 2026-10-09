@@ -138,7 +138,7 @@ describe('mcp protocol', () => {
     expect(await res.text()).toBe('');
   });
 
-  it('lists the fifteen tools with schemas', async () => {
+  it('lists the sixteen tools with schemas', async () => {
     const { body } = await rpc('tools/list');
     expect(body.result.tools.map((t: any) => t.name)).toEqual([
       'set_daily_plan',
@@ -147,6 +147,7 @@ describe('mcp protocol', () => {
       'get_history',
       'get_habits',
       'set_habits',
+      'set_experiments',
       'get_framework',
       'set_commitments',
       'defer_commitment',
@@ -453,6 +454,8 @@ describe('check-off timing', () => {
       ticked_in_bulk: false,
       bulk_ticked: [],
       backfilled: [],
+      flagged: [],
+      started_blocks: null,
     });
 
     // list_tasks carries the same facts for the plan
@@ -939,6 +942,8 @@ describe('batch ticks: only the batch is withheld', () => {
       ticked_in_bulk: true,
       bulk_ticked: ['SAT test', 'Lunch', 'Gov', 'Dinner'],
       backfilled: [],
+      flagged: [],
+      started_blocks: null,
       note: 'Left out of the figures above: 4 ticked in a batch (their times show when he ticked, not when he worked).',
     });
   });
@@ -1023,6 +1028,8 @@ describe('backfilled ticks and reported finish times', () => {
       ticked_in_bulk: false,
       bulk_ticked: [],
       backfilled: ['A'],
+      flagged: [],
+      started_blocks: null,
       note: 'Left out of the figures above: 1 ticked after the day ended.',
     });
   });
@@ -1295,6 +1302,8 @@ describe('rest api for the app', () => {
         minutes: null,
         notes: null,
         done: false,
+        started: null,
+        flagged: false,
         position: 0,
       },
     ]);
@@ -1333,5 +1342,102 @@ describe('rest api for the app', () => {
 
   it('404s unknown routes without requiring auth', async () => {
     expect((await call('/nope', {}, null)).status).toBe(404);
+  });
+});
+
+describe('start button, flag and day rating (app API)', () => {
+  const at = (h: number, m: number) => Date.UTC(2026, 9, 1, h + 7, m); // PDT, 2026-10-01
+  const patch = async (id: string, body: object) => {
+    const res = await call(`/api/tasks/${id}`, { method: 'PATCH', body: JSON.stringify(body) });
+    return { status: res.status, data: (await res.json()) as any };
+  };
+  const makeTask = async () =>
+    (await tool('set_daily_plan', { tasks: [{ title: 'Calc', start: '16:00', minutes: 40, tag: 'calculus3' }] })).data.tasks[0].id as string;
+
+  it('records Start, keeps the first press, and clears it on request', async () => {
+    const id = await makeTask();
+    store.clock = () => at(16, 20);
+    const first = await patch(id, { started: true });
+    expect(first.data).toMatchObject({ started: '2026-10-01T23:20:00.000Z', flagged: false });
+    store.clock = () => at(16, 50);
+    expect((await patch(id, { started: true })).data.started).toBe('2026-10-01T23:20:00.000Z'); // unchanged
+    expect((await patch(id, { started: false })).data.started).toBeNull();
+  });
+
+  it('turns Start + finish into a real duration, and a flag hides the timing', async () => {
+    const id = await makeTask();
+    store.clock = () => at(16, 20);
+    await patch(id, { started: true });
+    store.clock = () => at(17, 20);
+    await patch(id, { done: true });
+    let task = (await tool('list_tasks', {})).data.tasks[0];
+    expect(task).toMatchObject({ started: '16:20', actual_min: 60, start_delay_min: 20, late_min: 40, flagged: false });
+
+    await patch(id, { flagged: true });
+    task = (await tool('list_tasks', {})).data.tasks[0];
+    expect(task).toMatchObject({ flagged: true, started: null, actual_min: null, start_delay_min: null, late_min: null });
+    expect((await tool('list_tasks', {})).data.timing.flagged).toEqual(['Calc']);
+
+    await patch(id, { flagged: false });
+    expect((await tool('list_tasks', {})).data.tasks[0]).toMatchObject({ flagged: false, actual_min: 60 });
+  });
+
+  it('keeps Start and flag when the day is re-published with the same title', async () => {
+    const id = await makeTask();
+    await patch(id, { started: true });
+    await patch(id, { flagged: true });
+    await makeTask();
+    expect((await tool('list_tasks', {})).data.tasks[0]).toMatchObject({ flagged: true });
+    const api = await (await call('/api/tasks')).json();
+    expect((api as any).tasks[0]).toMatchObject({ flagged: true, started: expect.any(String) });
+  });
+
+  it('rejects a non-boolean started or flagged', async () => {
+    const id = await makeTask();
+    expect((await patch(id, { started: 'yes' })).status).toBe(400);
+    expect((await patch(id, { flagged: 1 })).status).toBe(400);
+  });
+
+  it('stores one rating per day (1 to 5), returns it, and shows it in history', async () => {
+    await makeTask();
+    const put = (body: object) => call('/api/rating', { method: 'PUT', body: JSON.stringify(body) });
+    expect(await (await put({ rating: 4 })).json()).toEqual({ date: '2026-10-01', rating: 4 });
+    expect(((await (await call('/api/tasks')).json()) as any).rating).toBe(4);
+    expect((await tool('get_history', { days: 1 })).data.days[0].rating).toBe(4);
+    expect((await put({ rating: 6 })).status).toBe(400);
+    expect((await put({ rating: 'great' })).status).toBe(400);
+    expect((await put({})).status).toBe(400);
+    expect(await (await put({ rating: null })).json()).toEqual({ date: '2026-10-01', rating: null });
+    expect(((await (await call('/api/tasks')).json()) as any).rating).toBeNull();
+  });
+});
+
+describe('experiments tool', () => {
+  const set = (experiments: object[]) => tool('set_experiments', { experiments });
+  const base = { id: 'calc-late', title: 'Calc 3 at 8pm', change: 'Move Calc 3 from 4pm to 8pm', measure: 'done_pct', tag: 'calculus3' };
+
+  it('creates an experiment starting today and shows it in get_habits', async () => {
+    expect((await set([base])).data).toEqual({ saved: 1, running: 1 });
+    const h = (await tool('get_habits', {})).data;
+    expect(h.experiments).toHaveLength(1);
+    expect(h.experiments[0]).toMatchObject({ id: 'calc-late', status: 'running', started_on: '2026-10-01', tag: 'calculus3' });
+    expect(h.experiments[0].note).toContain('Too early');
+  });
+
+  it('needs title, change and measure when new, and a result to close', async () => {
+    expect((await set([{ id: 'x' }])).isError).toBe(true);
+    await set([base]);
+    expect((await set([{ id: 'calc-late', status: 'kept' }])).text).toContain('result');
+    expect((await set([{ id: 'calc-late', status: 'kept', result: 'done 0% -> 80%' }])).data).toEqual({ saved: 1, running: 0 });
+    expect((await tool('get_habits', {})).data.experiments[0]).toMatchObject({ status: 'kept', result: 'done 0% -> 80%' });
+  });
+
+  it('allows at most three running experiments, and validates fields', async () => {
+    for (const id of ['a', 'b', 'c']) await set([{ ...base, id }]);
+    const fourth = await set([{ ...base, id: 'd' }]);
+    expect(fourth.isError).toBe(true);
+    expect(fourth.text).toContain('one thing at a time');
+    expect((await set([{ ...base, id: 'e', measure: 'vibes' }])).isError).toBe(true);
+    expect((await set([{ ...base, id: 'f', tag: 'gym' }])).isError).toBe(true);
   });
 });

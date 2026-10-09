@@ -4,7 +4,7 @@ import { resolveDate } from './dates';
 import { FirebaseSite } from './firebase';
 import { handleMcpPost } from './mcp';
 import { parsePrefixes, reconcile, type SyncConfig } from './sync';
-import { ValidationError, parsePatch, type Task, type TaskStore } from './tasks';
+import { ValidationError, parsePatch, parseRating, type Task, type TaskStore } from './tasks';
 
 export interface Env {
   DB: D1Database;
@@ -33,6 +33,10 @@ const apiView = (t: Task) => ({
   minutes: t.minutes,
   notes: t.notes,
   done: t.done,
+  /** ISO time he pressed Start, or null. */
+  started: t.startedAt,
+  /** He held the flag on it: its times are unreliable. */
+  flagged: t.flaggedAt !== null,
   position: t.position,
 });
 
@@ -41,7 +45,8 @@ const apiView = (t: Task) => ({
  *   POST   /mcp            MCP endpoint (Authorization: Bearer <token>)
  *   POST   /mcp/<token>    MCP endpoint for clients that can't send headers (claude.ai connectors)
  *   GET    /api/tasks?date=YYYY-MM-DD
- *   PATCH  /api/tasks/:id  {done?, title?, tag?, start?, minutes?, notes?}
+ *   PATCH  /api/tasks/:id  {done?, started?, flagged?, title?, tag?, start?, minutes?, notes?}
+ *   PUT    /api/rating     {date?, rating: 1-5 | null}  how the day felt
  *   DELETE /api/tasks/:id
  */
 export async function handleRequest(
@@ -58,7 +63,7 @@ export async function handleRequest(
   if (path === '/') return new Response('cozy-planner ok\n');
 
   const isMcp = path === '/mcp' || path.startsWith('/mcp/');
-  const isApi = path === '/api/tasks' || path.startsWith('/api/tasks/');
+  const isApi = path === '/api/tasks' || path.startsWith('/api/tasks/') || path === '/api/rating';
   if (!isMcp && !isApi) return json({ error: 'not found' }, 404);
 
   if (!tokenConfigured(env.API_TOKEN)) {
@@ -81,15 +86,28 @@ export async function handleRequest(
 
     if (!(await bearerMatches(request, env.API_TOKEN))) return unauthorized();
 
+    if (path === '/api/rating') {
+      if (request.method !== 'PUT') return json({ error: 'method not allowed' }, 405);
+      const body = (await request.json().catch(() => {
+        throw new ValidationError('body must be JSON');
+      })) as Record<string, unknown>;
+      const date = resolveDate(typeof body?.date === 'string' ? body.date : null, timeZone, now);
+      if (!body || !('rating' in body)) throw new ValidationError('rating is required: 1 to 5, or null to clear');
+      const rating = parseRating(body.rating);
+      await store.setRating(date, rating);
+      return json({ date, rating });
+    }
+
     if (path === '/api/tasks') {
       if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405);
       const date = resolveDate(url.searchParams.get('date'), timeZone, now);
-      const [tasks, info] = await Promise.all([store.list(date), store.getDayInfo(date)]);
+      const [tasks, info, rating] = await Promise.all([store.list(date), store.getDayInfo(date), store.getRating(date)]);
       await reconcile(store, tasks, sync); // pull in anything he ticked on the site
       return json({
         date,
         headline: info.headline,
         sections: info.sections,
+        rating,
         tasks: tasks.map(apiView),
       });
     }

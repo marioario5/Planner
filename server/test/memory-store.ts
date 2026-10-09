@@ -2,6 +2,7 @@ import {
   normalizeTitle,
   type Commitment,
   type CommitmentWork,
+  type Experiment,
   type UserNote,
   type DayInfo,
   type FrameworkLogEntry,
@@ -25,6 +26,8 @@ export class MemoryTaskStore implements TaskStore {
   private userNotes = new Map<string, UserNote>();
   private log: FrameworkLogEntry[] = [];
   private meta = new Map<string, string>();
+  private ratings = new Map<string, number>();
+  private experiments = new Map<string, Experiment>();
   /** Tests can pin the clock that stamps check-offs. */
   clock: () => number = () => Date.now();
 
@@ -49,7 +52,7 @@ export class MemoryTaskStore implements TaskStore {
 
   async add(date: string, plan: Plan, task: NewTask): Promise<Task> {
     const position = this.tasks.filter((t) => t.date === date && t.plan === plan).length;
-    return this.insert(date, plan, task, position, false, null);
+    return this.insert(date, plan, task, position, false, null, null, null);
   }
 
   async replaceDay(date: string, plan: Plan, tasks: NewTask[]): Promise<Task[]> {
@@ -58,7 +61,7 @@ export class MemoryTaskStore implements TaskStore {
     this.tasks = this.tasks.filter((t) => !(t.date === date && t.plan === plan));
     tasks.forEach((t, i) => {
       const old = previous.get(normalizeTitle(t.title));
-      this.insert(date, plan, t, i, old?.done === true, old?.doneAt ?? null);
+      this.insert(date, plan, t, i, old?.done === true, old?.doneAt ?? null, old?.startedAt ?? null, old?.flaggedAt ?? null);
     });
     return (await this.list(date)).filter((t) => t.plan === plan);
   }
@@ -72,6 +75,12 @@ export class MemoryTaskStore implements TaskStore {
     if (patch.minutes !== undefined) task.minutes = patch.minutes;
     if (patch.notes !== undefined) task.notes = patch.notes;
     if (patch.siteKey !== undefined) task.siteKey = patch.siteKey;
+    if (patch.started !== undefined) {
+      task.startedAt = patch.started ? (task.startedAt ?? new Date(this.clock()).toISOString()) : null;
+    }
+    if (patch.flagged !== undefined) {
+      task.flaggedAt = patch.flagged ? (task.flaggedAt ?? new Date(this.clock()).toISOString()) : null;
+    }
     if (patch.done !== undefined) {
       task.done = patch.done;
       task.doneAt = this.clock();
@@ -162,6 +171,33 @@ export class MemoryTaskStore implements TaskStore {
     return this.habits.map((h) => ({ version: h.version, updatedAt: h.updatedAt, chars: h.text.length }));
   }
 
+  async getRating(date: string): Promise<number | null> {
+    return this.ratings.get(date) ?? null;
+  }
+
+  async setRating(date: string, rating: number | null): Promise<void> {
+    if (rating === null) this.ratings.delete(date);
+    else this.ratings.set(date, rating);
+  }
+
+  async listRatings(from: string, to: string): Promise<Map<string, number>> {
+    return new Map([...this.ratings].filter(([d]) => d >= from && d <= to));
+  }
+
+  async listExperiments(): Promise<Experiment[]> {
+    return [...this.experiments.values()].sort((a, b) =>
+      a.startedOn === b.startedOn ? (a.id < b.id ? -1 : 1) : a.startedOn < b.startedOn ? 1 : -1,
+    );
+  }
+
+  async saveExperiment(e: Experiment): Promise<void> {
+    this.experiments.set(e.id, { ...e });
+  }
+
+  async deleteExperiment(id: string): Promise<boolean> {
+    return this.experiments.delete(id);
+  }
+
   async getDayInfo(date: string): Promise<DayInfo> {
     return this.info.get(date) ?? { headline: null, sections: [] };
   }
@@ -178,6 +214,8 @@ export class MemoryTaskStore implements TaskStore {
     position: number,
     done: boolean,
     doneAt: number | null,
+    startedAt: string | null,
+    flaggedAt: string | null,
   ): Task {
     const row: Task = {
       id: `t${++this.seq}`,
@@ -195,6 +233,8 @@ export class MemoryTaskStore implements TaskStore {
       position,
       createdAt: new Date().toISOString(),
       completedAt: done ? new Date(doneAt ?? this.clock()).toISOString() : null,
+      startedAt,
+      flaggedAt,
     };
     this.tasks.push(row);
     return row;

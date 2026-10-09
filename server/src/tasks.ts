@@ -28,6 +28,10 @@ export interface Task {
   position: number;
   createdAt: string;
   completedAt: string | null;
+  /** When he pressed Start on it (ISO), or null. Together with `completedAt` it gives the real time the block took. */
+  startedAt: string | null;
+  /** When he flagged it (ISO), or null: "my start or finish time for this one is wrong". Flagged tasks never feed a timing figure. */
+  flaggedAt: string | null;
 }
 
 export interface NewTask {
@@ -49,6 +53,10 @@ export interface TaskPatch {
   notes?: string | null;
   siteKey?: string | null;
   done?: boolean;
+  /** true = he pressed Start (keeps the first press); false = clear it. */
+  started?: boolean;
+  /** true = flag the task's times as unreliable; false = unflag. */
+  flagged?: boolean;
 }
 
 /** A titled block of text Claude writes for the day (warnings, pre-start, next PCB work...); each is a button in the app. */
@@ -129,6 +137,30 @@ export interface UserNote {
   updatedAt: string;
 }
 
+export const EXPERIMENT_STATUSES = ['running', 'kept', 'dropped'] as const;
+export type ExperimentStatus = (typeof EXPERIMENT_STATUSES)[number];
+export const EXPERIMENT_MEASURES = ['done_pct', 'lateness', 'blocks_done', 'rating'] as const;
+export type ExperimentMeasure = (typeof EXPERIMENT_MEASURES)[number];
+
+/**
+ * One deliberate change to how his days are planned ("Calc 3 at 8pm instead of 4pm"), with the number it is supposed to move.
+ * The server compares the days before the start date with the days after, so a later run can see whether it helped.
+ */
+export interface Experiment {
+  id: string;
+  title: string;
+  /** What exactly was changed, in a sentence. */
+  change: string;
+  measure: ExperimentMeasure;
+  /** Only look at this subject's blocks, or null for all work blocks. */
+  tag: Tag | null;
+  startedOn: string; // YYYY-MM-DD
+  status: ExperimentStatus;
+  /** What was concluded, once it is no longer running. */
+  result: string | null;
+  updatedAt: string;
+}
+
 /** The living note Claude keeps about how he works. Each save is a new version; the last 10 are kept. */
 export interface HabitNotes {
   version: number;
@@ -175,6 +207,15 @@ export interface TaskStore {
   getHabitNotes(version?: number): Promise<HabitNotes | null>;
   /** Saved versions, newest first. */
   listHabitVersions(): Promise<HabitVersion[]>;
+  /** How the day felt, 1 (rough) to 5 (great), or null. */
+  getRating(date: string): Promise<number | null>;
+  /** null clears it. */
+  setRating(date: string, rating: number | null): Promise<void>;
+  /** date -> rating for days in range that have one. */
+  listRatings(from: string, to: string): Promise<Map<string, number>>;
+  listExperiments(): Promise<Experiment[]>;
+  saveExperiment(e: Experiment): Promise<void>;
+  deleteExperiment(id: string): Promise<boolean>;
   /** Empty (no headline, no sections) when nothing was written for the day. */
   getDayInfo(date: string): Promise<DayInfo>;
   /** Replaces the day's info. An empty DayInfo clears it. */
@@ -297,8 +338,16 @@ export function parsePatch(value: unknown): TaskPatch {
   if (typeof value !== 'object' || value === null) {
     throw new ValidationError('patch must be an object');
   }
-  const { title, tag, done, start, minutes, notes, siteKey } = value as Record<string, unknown>;
+  const { title, tag, done, start, minutes, notes, siteKey, started, flagged } = value as Record<string, unknown>;
   const patch: TaskPatch = {};
+  if (started !== undefined) {
+    if (typeof started !== 'boolean') throw new ValidationError('started must be true or false');
+    patch.started = started;
+  }
+  if (flagged !== undefined) {
+    if (typeof flagged !== 'boolean') throw new ValidationError('flagged must be true or false');
+    patch.flagged = flagged;
+  }
   if (siteKey !== undefined) patch.siteKey = parseSiteKey(siteKey);
   if (title !== undefined) patch.title = parseTitle(title);
   if (tag !== undefined) patch.tag = parseTag(tag);
@@ -310,7 +359,7 @@ export function parsePatch(value: unknown): TaskPatch {
     patch.done = done;
   }
   if (Object.keys(patch).length === 0) {
-    throw new ValidationError('nothing to update: pass title, tag, start, minutes, notes, siteKey, or done');
+    throw new ValidationError('nothing to update: pass title, tag, start, minutes, notes, siteKey, done, started, or flagged');
   }
   return patch;
 }
@@ -365,6 +414,14 @@ export function parseHabitNotes(value: unknown): string {
     throw new ValidationError(`notes must be at most ${MAX_HABIT_NOTES} characters (got ${text.length}); tighten them`);
   }
   return text;
+}
+
+export function parseRating(value: unknown): number | null {
+  if (value === null) return null;
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 5) {
+    throw new ValidationError('rating must be a whole number from 1 to 5, or null to clear it');
+  }
+  return value;
 }
 
 export function parseId(value: unknown): string {

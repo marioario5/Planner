@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { computeHabits } from '../src/habits';
-import type { Plan, Tag, Task } from '../src/tasks';
+import { computeHabits, evaluateExperiments } from '../src/habits';
+import type { Experiment, Plan, Tag, Task } from '../src/tasks';
 
 const TZ = 'America/Los_Angeles'; // PDT (UTC-7) for every date used here
 const TODAY = '2026-10-20';
@@ -21,6 +21,9 @@ interface Spec {
   minutes?: number | null;
   /** Local time he ticked it on the same day; or [time, dayOffset] for a later day. */
   tick?: string | [string, number];
+  /** Local time he pressed Start (same day), and whether he flagged the task. */
+  began?: string;
+  flagged?: boolean;
 }
 
 function task(s: Spec): Task {
@@ -41,6 +44,8 @@ function task(s: Spec): Task {
     position: 0,
     createdAt: iso(s.date, '12:00'),
     completedAt: tick ? iso(s.date, tick[0], tick[1]) : null,
+    startedAt: s.began ? iso(s.date, s.began) : null,
+    flaggedAt: s.flagged ? iso(s.date, '23:00') : null,
   };
 }
 
@@ -228,5 +233,118 @@ describe('confidence', () => {
       carry_over: { overall: null, by_tag: {}, by_position: {} },
     });
     expect(h.window.days_with_tasks).toBe(0);
+  });
+});
+
+describe('real durations from the Start button', () => {
+  it('measures start delay and actual vs planned time, and skips flagged or unstarted blocks', () => {
+    const tasks = [
+      ...WEEKDAYS.map((date) => task({ date, tag: 'calculus3', start: '16:00', minutes: 40, began: '16:20', tick: '17:20' })), // 60 min, began 20 late
+      task({ date: WEEKDAYS[0], tag: 'sat', start: '18:00', minutes: 30, tick: '18:45' }), // no Start press
+      task({ date: WEEKDAYS[1], tag: 'sat', start: '18:00', minutes: 30, began: '18:00', tick: '23:00', flagged: true }), // flagged
+    ];
+    const h = computeHabits(tasks, TZ, TODAY);
+    expect(h.duration_by_tag.calculus3).toEqual({ n: 5, median_planned_min: 40, median_actual_min: 60, median_ratio: 1.5 });
+    expect(h.duration_by_tag.sat).toBeUndefined();
+    expect(h.start_delay).toEqual({ n: 5, median_min: 20, avg_min: 20 });
+    expect(h.data_quality).toMatchObject({ flagged_tasks: 1, tasks_with_start_press: 6 });
+  });
+
+  it('a flagged task feeds no lateness, time-of-day or bulk figure', () => {
+    const tasks = [
+      ...WEEKDAYS.map((date) => task({ date, tag: 'sat', start: '15:30', minutes: 30, tick: '16:00' })),
+      // flagged ticks 23:00 would otherwise drag lateness and make a bulk batch with the real ones
+      ...WEEKDAYS.map((date) => task({ date, tag: 'sat', start: '16:30', minutes: 30, tick: '23:00', flagged: true })),
+      ...WEEKDAYS.map((date) => task({ date, tag: 'sat', start: '17:00', minutes: 30, tick: '23:01', flagged: true })),
+    ];
+    const h = computeHabits(tasks, TZ, TODAY);
+    expect(h.lateness_by_tag.sat).toMatchObject({ n: 5, median_late_min: 0 });
+    expect(h.data_quality.bulk_ticked_tasks).toBe(0);
+    expect(h.best_times.weekday?.median_last_done).toBe('16:00');
+  });
+});
+
+describe('capacity: what a day can really hold', () => {
+  it('reports planned vs finished work, ignoring dinner and wrap-up and unfinished blocks', () => {
+    const tasks = WEEKDAYS.flatMap((date, i) => [
+      task({ date, tag: 'school', start: '16:00', minutes: 30, tick: '16:40' }),
+      task({ date, tag: 'calculus3', start: '16:45', minutes: 45, tick: i < 2 ? '17:40' : undefined }), // done on 2 of 5 days
+      task({ date, tag: 'sat', start: '18:00', minutes: 50 }), // never done
+      task({ date, tag: 'other', start: '19:30', minutes: 30, tick: '20:00' }), // dinner: not work
+    ]);
+    const h = computeHabits(tasks, TZ, TODAY);
+    expect(h.capacity.weekday).toEqual({
+      days: 5,
+      median_planned_blocks: 3,
+      median_done_blocks: 1,
+      median_planned_minutes: 125,
+      median_done_minutes: 30,
+      good_day_done_minutes: 75,
+      done_on_day_pct: 47, // 7 of 15 work blocks
+    });
+    expect(h.capacity.weekend).toBeNull();
+    expect(h.insufficient).toContainEqual({ measure: 'capacity_weekend', key: 'days', n: 0 });
+  });
+});
+
+describe('ratings', () => {
+  it('summarises how finished days felt and ignores days outside the window', () => {
+    const tasks = WEEKDAYS.map((date) => task({ date, tick: '16:00' }));
+    const ratings = new Map([
+      ['2026-10-12', 2],
+      ['2026-10-13', 4],
+      ['2026-10-20', 5], // today: not a finished day
+      ['2026-01-01', 1], // long before the window
+    ]);
+    const h = computeHabits(tasks, TZ, TODAY, 28, ratings);
+    expect(h.ratings).toEqual({
+      n: 2,
+      avg: 3,
+      recent: [
+        { date: '2026-10-12', rating: 2 },
+        { date: '2026-10-13', rating: 4 },
+      ],
+    });
+  });
+});
+
+describe('experiments compare before and after', () => {
+  const exp = (over: Partial<Experiment> = {}): Experiment => ({
+    id: 'calc-late',
+    title: 'Calc 3 at 8pm',
+    change: 'Calc 3 moved from 4pm to 8pm',
+    measure: 'done_pct',
+    tag: 'calculus3',
+    startedOn: '2026-10-14',
+    status: 'running',
+    result: null,
+    updatedAt: '2026-10-14T00:00:00Z',
+    ...over,
+  });
+  // Oct 12, 13 before (not done); Oct 14, 15, 16 after (done)
+  const tasks = [
+    ...['2026-10-12', '2026-10-13'].map((date) => task({ date, tag: 'calculus3', start: '16:00', minutes: 40 })),
+    ...['2026-10-14', '2026-10-15', '2026-10-16'].map((date) => task({ date, tag: 'calculus3', start: '20:00', minutes: 40, tick: '20:45' })),
+  ];
+
+  it('says it is too early until each side has 3 finished days', () => {
+    const [v] = evaluateExperiments(tasks, new Map(), [exp()], TZ, TODAY);
+    expect(v.before).toMatchObject({ days: 2, done_on_day_pct: 0 });
+    expect(v.after).toMatchObject({ days: 3, done_on_day_pct: 100 });
+    expect(v.focus).toEqual({ metric: 'done_on_day_pct', before: 0, after: 100 });
+    expect(v.note).toContain('Too early');
+  });
+
+  it('compares once there are enough days on both sides', () => {
+    const more = [...tasks, task({ date: '2026-10-11', tag: 'calculus3', start: '16:00', minutes: 40 })];
+    const [v] = evaluateExperiments(more, new Map(), [exp()], TZ, TODAY);
+    expect(v.before?.days).toBe(3);
+    expect(v.note).toContain('Enough days');
+  });
+
+  it('only measures running experiments; closed ones just carry their result', () => {
+    const [v] = evaluateExperiments(tasks, new Map(), [exp({ status: 'kept', result: 'worked: 0% -> 100%' })], TZ, TODAY);
+    expect(v).toMatchObject({ status: 'kept', result: 'worked: 0% -> 100%' });
+    expect(v.before).toBeUndefined();
   });
 });

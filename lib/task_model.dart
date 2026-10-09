@@ -31,6 +31,13 @@ class Task {
   final int? minutes;
   final String? notes;
 
+  /// When he pressed Start on it (local time), or null.
+  DateTime? startedAt;
+
+  /// He held the flag on it: his start or finish time for this task is wrong,
+  /// so the planner must not learn from it.
+  bool flagged;
+
   Task({
     required this.id,
     required this.label,
@@ -40,7 +47,16 @@ class Task {
     this.start,
     this.minutes,
     this.notes,
+    this.startedAt,
+    this.flagged = false,
   });
+
+  /// "4:20pm" for when he pressed Start; null if he hasn't.
+  String? get startedLabel {
+    final t = startedAt;
+    if (t == null) return null;
+    return formatClock('${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}');
+  }
 
   /// e.g. "3:30pm · 25m"; null when the task has no time.
   String? get timeLabel {
@@ -63,7 +79,10 @@ class DayPlan {
   final List<Task> tasks;
   final String? headline;
   final List<InfoSection> sections;
-  const DayPlan({required this.tasks, this.headline, this.sections = const []});
+
+  /// How the day felt, 1 (rough) to 5 (great), or null.
+  final int? rating;
+  const DayPlan({required this.tasks, this.headline, this.sections = const [], this.rating});
 }
 
 /// Short text shown on the receipt. (`name` is the enum's built-in id, which

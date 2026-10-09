@@ -23,7 +23,9 @@
     "db:framework:local": "wrangler d1 execute cozy-planner --local --file=migrations/0007_framework.sql",
     "db:framework:remote": "wrangler d1 execute cozy-planner --remote --file=migrations/0007_framework.sql",
     "db:notes:local": "wrangler d1 execute cozy-planner --local --file=migrations/0008_user_notes.sql",
-    "db:notes:remote": "wrangler d1 execute cozy-planner --remote --file=migrations/0008_user_notes.sql"
+    "db:notes:remote": "wrangler d1 execute cozy-planner --remote --file=migrations/0008_user_notes.sql",
+    "db:start:local": "wrangler d1 execute cozy-planner --local --file=migrations/0009_start_flag_rating_experiments.sql",
+    "db:start:remote": "wrangler d1 execute cozy-planner --remote --file=migrations/0009_start_flag_rating_experiments.sql"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261002.1",

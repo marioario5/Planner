@@ -5,13 +5,16 @@
 import { localTime, plannerToday, plannerTimeToEpoch, resolveDate, shiftDate } from './dates';
 import { MAX_DEFER_DAYS, MAX_OPEN_COMMITMENTS, computeFramework, unaddressed } from './framework';
 import { MAX_ACTIVE_NOTES, resolvedToPrune, viewUserNotes } from './user-notes';
-import { DEFAULT_WINDOW_DAYS, MAX_WINDOW_DAYS, computeHabits } from './habits';
+import { DEFAULT_WINDOW_DAYS, MAX_WINDOW_DAYS, computeHabits, evaluateExperiments } from './habits';
 import { DEFAULT_PREFIXES, isSyncable, reconcile, type SyncConfig } from './sync';
-import { bulkTickedIds, completedAtLocal, dayTiming, isBackfilled, lateMinutes } from './timing';
+import { actualMinutes, bulkTickedIds, completedAtLocal, dayTiming, isBackfilled, isFlagged, lateMinutes, startDelayMinutes, startedMinutes } from './timing';
 import {
   COMMITMENT_STATUSES,
   PLANS,
   TAGS,
+  EXPERIMENT_MEASURES,
+  EXPERIMENT_STATUSES,
+  type Experiment,
   USER_NOTE_KINDS,
   USER_NOTE_STATUSES,
   ValidationError,
@@ -24,6 +27,7 @@ import {
   parsePatch,
   parsePlan,
   parseStart,
+  parseTag,
   parseUserNoteId,
   type Commitment,
   type CommitmentStatus,
@@ -216,7 +220,9 @@ const TOOLS = [
       '(by subject and by where a block sits in the day). Figures with too few samples are withheld and listed under ' +
       '`insufficient`, and `confidence` is "low" until there are 5 finished days, so do not write habits from thin data. ' +
       '`notes` is the habit note you maintain with set_habits (null if none yet) and `versions` lists the saved versions; ' +
-      'pass `version` to read an older note instead.',
+      'pass `version` to read an older note instead. `stats.capacity` is what a day of his can actually hold (plan to it); ' +
+      '`stats.duration_by_tag` and `stats.start_delay` come from blocks where he pressed Start; `stats.ratings` is how his days felt; ' +
+      '`experiments` are the deliberate changes being tried, each compared before and after (see set_experiments).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -244,6 +250,41 @@ const TOOLS = [
       required: ['notes'],
     },
     annotations: { destructiveHint: false, idempotentHint: false },
+  },
+  {
+    name: 'set_experiments',
+    description:
+      'Start, update or close experiments: one deliberate change to how his days are planned (for example "Calc 3 at 8pm instead of 4pm"), ' +
+      'with the number it should move. The server compares the finished days before the start date with the days after, and get_habits ' +
+      'shows that under `experiments`, so a later run can see whether it helped. Change one thing at a time (at most 3 running). ' +
+      'New experiments need an id (a short slug), a title, the change, and a measure: done_pct (share of blocks done on their day), ' +
+      'lateness (median minutes late), blocks_done (blocks finished per day) or rating (how the day felt). Set `tag` to look only at one subject. ' +
+      'Close one by setting status to "kept" or "dropped" with a short result. Existing ids take partial updates.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        experiments: {
+          type: 'array',
+          maxItems: 10,
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,39}$', description: 'Short slug, e.g. calc-late-evening.' },
+              title: { type: 'string', maxLength: 100 },
+              change: { type: 'string', maxLength: 300, description: 'What exactly is different, in a sentence.' },
+              measure: { type: 'string', enum: [...EXPERIMENT_MEASURES] },
+              tag: { type: ['string', 'null'], enum: [...TAGS, null], description: 'Only look at this subject; null = all work blocks.' },
+              started_on: { ...dateProp, description: 'First day the change applies. Defaults to today.' },
+              status: { type: 'string', enum: [...EXPERIMENT_STATUSES] },
+              result: { type: ['string', 'null'], maxLength: 400, description: 'What was concluded; required when closing.' },
+            },
+            required: ['id'],
+          },
+        },
+      },
+      required: ['experiments'],
+    },
+    annotations: { destructiveHint: false, idempotentHint: true },
   },
   {
     name: 'get_framework',
@@ -451,6 +492,13 @@ const view = (t: Task, timeZone: string, bulk?: Set<string>) => ({
   backfilled: isBackfilled(t, timeZone),
   // Ticked in a batch (3+ within 10 minutes), so the time is when he ticked, not when he worked (no lateness is reported).
   bulk_ticked: bulk?.has(t.id) ?? false,
+  // Local HH:MM he pressed Start (null if he didn't, or flagged it).
+  started: startedMinutes(t, timeZone) === null ? null : localTime(t.startedAt!, timeZone),
+  // How long the block really took (Start to tick) and how long after its planned start he began. Null unless trustworthy.
+  actual_min: actualMinutes(t, timeZone, bulk),
+  start_delay_min: startDelayMinutes(t, timeZone),
+  // He held the flag on it: his start or finish time for this block is unreliable, so no timing is reported for it.
+  flagged: isFlagged(t),
 });
 
 function summarize(date: string, plan: Plan, tasks: Task[], timeZone: string): Json {
@@ -727,14 +775,85 @@ async function habits(args: Json, ctx: McpContext): Promise<Json> {
   }
   const days = parseWindow(args.days);
   const today = plannerToday(timeZone, now);
-  const all = await store.listRange(shiftDate(today, -days), today);
+  const experiments = await store.listExperiments();
+  // Reach back far enough to compare each running experiment with the 14 days before it started.
+  const earliest = experiments.filter((e) => e.status === 'running').map((e) => shiftDate(e.startedOn, -14));
+  const from = [shiftDate(today, -days), ...earliest].sort()[0];
+  const all = await store.listRange(from, today);
   await reconcile(store, all, ctx.sync); // pick up anything he ticked on the site
+  const ratings = await store.listRatings(from, today);
   const [latest, versions] = await Promise.all([store.getHabitNotes(), store.listHabitVersions()]);
   return {
-    stats: computeHabits(all, timeZone, today, days),
+    stats: computeHabits(all, timeZone, today, days, ratings),
+    experiments: evaluateExperiments(all, ratings, experiments, timeZone, today),
     notes: latest ? noteView(latest) : null,
     versions: versions.map((v) => ({ version: v.version, updated_at: v.updatedAt, chars: v.chars })),
   };
+}
+
+const MAX_RUNNING_EXPERIMENTS = 3;
+const MAX_CLOSED_EXPERIMENTS_KEPT = 10;
+
+async function setExperiments(args: Json, ctx: McpContext): Promise<Json> {
+  const { store, now, timeZone } = ctx;
+  if (!Array.isArray(args.experiments)) throw new ValidationError('experiments must be an array');
+  if (args.experiments.length > 10) throw new ValidationError('at most 10 experiments per call');
+  const today = plannerToday(timeZone, now);
+  const stamp = (now ?? new Date()).toISOString();
+  const has = (r: Json, k: string) => Object.prototype.hasOwnProperty.call(r, k);
+  const text = (r: Json, k: string, max: number, id: string): string => {
+    const v = r[k];
+    if (typeof v !== 'string' || v.trim() === '' || v.trim().length > max) {
+      throw new ValidationError(`${k} for "${id}" must be 1 to ${max} characters`);
+    }
+    return v.trim();
+  };
+
+  const merged = new Map((await store.listExperiments()).map((e) => [e.id, e]));
+  const touched = new Map<string, Experiment>();
+  for (const raw of args.experiments) {
+    if (typeof raw !== 'object' || raw === null) throw new ValidationError('each experiment must be an object with an id');
+    const r = raw as Json;
+    const id = parseCommitmentId(r.id); // same short-slug rule
+    const old = merged.get(id);
+    if (!old && (!has(r, 'title') || !has(r, 'change') || !has(r, 'measure'))) {
+      throw new ValidationError(`new experiment "${id}" needs a title, a change and a measure`);
+    }
+    const next: Experiment = old
+      ? { ...old }
+      : { id, title: '', change: '', measure: 'done_pct', tag: null, startedOn: today, status: 'running', result: null, updatedAt: stamp };
+    if (has(r, 'title')) next.title = text(r, 'title', 100, id);
+    if (has(r, 'change')) next.change = text(r, 'change', 300, id);
+    if (has(r, 'measure')) {
+      if (typeof r.measure !== 'string' || !(EXPERIMENT_MEASURES as readonly string[]).includes(r.measure)) {
+        throw new ValidationError(`measure for "${id}" must be one of: ${EXPERIMENT_MEASURES.join(', ')}`);
+      }
+      next.measure = r.measure as Experiment['measure'];
+    }
+    if (has(r, 'tag')) next.tag = r.tag === null ? null : parseTag(r.tag);
+    if (has(r, 'started_on')) next.startedOn = resolveDate(r.started_on, timeZone, now);
+    if (has(r, 'result')) next.result = r.result === null ? null : text(r, 'result', 400, id);
+    if (has(r, 'status')) {
+      if (typeof r.status !== 'string' || !(EXPERIMENT_STATUSES as readonly string[]).includes(r.status)) {
+        throw new ValidationError(`status for "${id}" must be one of: ${EXPERIMENT_STATUSES.join(', ')}`);
+      }
+      next.status = r.status as Experiment['status'];
+    }
+    if (next.status !== 'running' && !next.result) {
+      throw new ValidationError(`closing "${id}" needs a short result (what you concluded)`);
+    }
+    next.updatedAt = stamp;
+    merged.set(id, next);
+    touched.set(id, next);
+  }
+  const running = [...merged.values()].filter((e) => e.status === 'running').length;
+  if (running > MAX_RUNNING_EXPERIMENTS) {
+    throw new ValidationError(`that would leave ${running} running experiments; keep at most ${MAX_RUNNING_EXPERIMENTS} (change one thing at a time)`);
+  }
+  for (const e of touched.values()) await store.saveExperiment(e);
+  const closed = [...merged.values()].filter((e) => e.status !== 'running').sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
+  for (const e of closed.slice(MAX_CLOSED_EXPERIMENTS_KEPT)) await store.deleteExperiment(e.id);
+  return { saved: touched.size, running };
 }
 
 async function history(args: Json, ctx: McpContext): Promise<Json> {
@@ -745,6 +864,7 @@ async function history(args: Json, ctx: McpContext): Promise<Json> {
 
   const all = await store.listRange(from, through);
   await reconcile(store, all, ctx.sync); // pick up anything he ticked on the site
+  const ratings = await store.listRatings(from, through);
   const byDate = new Map<string, Task[]>();
   for (const t of all) {
     byDate.set(t.date, [...(byDate.get(t.date) ?? []), t]);
@@ -768,6 +888,7 @@ async function history(args: Json, ctx: McpContext): Promise<Json> {
       done: followed.done,
       total: followed.total,
       ...(other ? { other_plan: other } : {}),
+      ...(ratings.has(date) ? { rating: ratings.get(date) } : {}),
       ...(timing ? { timing } : {}),
       tasks: tasks.map((t) => ({
         title: t.title,
@@ -780,6 +901,10 @@ async function history(args: Json, ctx: McpContext): Promise<Json> {
         late_min: lateMinutes(t, timeZone, bulk),
         backfilled: isBackfilled(t, timeZone),
         bulk_ticked: bulk.has(t.id),
+        started: startedMinutes(t, timeZone) === null ? null : localTime(t.startedAt!, timeZone),
+        actual_min: actualMinutes(t, timeZone, bulk),
+        start_delay_min: startDelayMinutes(t, timeZone),
+        flagged: isFlagged(t),
       })),
     };
   });
@@ -842,6 +967,8 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
       if (!(await store.deleteUserNote(id))) throw new ValidationError(`no note "${id}"`);
       return { deleted: id };
     }
+    case 'set_experiments':
+      return setExperiments(args, ctx);
     case 'set_habits': {
       const saved = await store.saveHabitNotes(parseHabitNotes(args.notes));
       return { version: saved.version, updated_at: saved.updatedAt, chars: saved.text.length };

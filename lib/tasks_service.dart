@@ -105,6 +105,9 @@ class TasksService {
                 start: t['start'] as String?,
                 minutes: t['minutes'] as int?,
                 notes: t['notes'] as String?,
+                // Both absent on a server that predates the Start button and flag.
+                startedAt: DateTime.tryParse((t['started'] as String?) ?? '')?.toLocal(),
+                flagged: (t['flagged'] as bool?) ?? false,
               ))
           .toList();
       // `sections` is absent on a server that predates info sections.
@@ -119,6 +122,7 @@ class TasksService {
         tasks: tasks,
         headline: body['headline'] as String?,
         sections: sections,
+        rating: body['rating'] as int?,
       );
     } on TasksException {
       rethrow;
@@ -130,7 +134,7 @@ class TasksService {
     }
   }
 
-  static Future<bool> setTaskCompleted(Task task, bool completed) async {
+  static Future<bool> _patchTask(Task task, Map<String, dynamic> body) async {
     if (!isConfigured) return false;
 
     try {
@@ -138,12 +142,42 @@ class TasksService {
           .patch(
             Uri.parse('$_baseUrl/api/tasks/${Uri.encodeComponent(task.id)}'),
             headers: _headers,
-            body: jsonEncode({'done': completed}),
+            body: jsonEncode(body),
           )
           .timeout(_timeout);
       return res.statusCode == 200;
     } catch (e) {
       debugPrint('Task update error: $e');
+      return false;
+    }
+  }
+
+  static Future<bool> setTaskCompleted(Task task, bool completed) =>
+      _patchTask(task, {'done': completed});
+
+  /// Records (or clears) the moment he pressed Start. The server keeps the first press.
+  static Future<bool> setTaskStarted(Task task, bool started) =>
+      _patchTask(task, {'started': started});
+
+  /// Flags (or unflags) a task whose start or finish time is wrong.
+  static Future<bool> setTaskFlagged(Task task, bool flagged) =>
+      _patchTask(task, {'flagged': flagged});
+
+  /// How today felt, 1 to 5; null clears it.
+  static Future<bool> setRating(int? rating) async {
+    if (!isConfigured) return false;
+
+    try {
+      final res = await http
+          .put(
+            Uri.parse('$_baseUrl/api/rating'),
+            headers: _headers,
+            body: jsonEncode({'date': _today(), 'rating': rating}),
+          )
+          .timeout(_timeout);
+      return res.statusCode == 200;
+    } catch (e) {
+      debugPrint('Rating error: $e');
       return false;
     }
   }
