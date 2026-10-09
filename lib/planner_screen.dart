@@ -257,6 +257,20 @@ class _PlannerScreenState extends State<PlannerScreen>
     }
   }
 
+  /// The stop/reset button under the flag: forgets the Start press (an accidental Start, or a start he doesn't trust).
+  Future<void> _resetStart(Task task) async {
+    HapticFeedback.mediumImpact();
+    final before = task.startedAt;
+    setState(() => task.startedAt = null);
+    final ok = await TasksService.setTaskStarted(task, false);
+    if (!ok && mounted) {
+      setState(() {
+        task.startedAt = before;
+        _error = "Couldn't sync that change";
+      });
+    }
+  }
+
   /// Held for two seconds (see _HoldFlag): marks the task's times as unreliable, or clears the mark.
   Future<void> _toggleFlag(Task task) async {
     final flagged = !task.flagged;
@@ -698,6 +712,7 @@ class _PlannerScreenState extends State<PlannerScreen>
             task: t,
             onToggle: () => _toggleTask(t),
             onStart: () => _startTask(t),
+            onResetStart: () => _resetStart(t),
             onFlag: () => _toggleFlag(t),
             onDelete: () => _deleteTask(t),
           )).toList(),
@@ -951,12 +966,14 @@ class _TaskRow extends StatefulWidget {
   final Task task;
   final VoidCallback onToggle;
   final VoidCallback onStart;
+  final VoidCallback onResetStart;
   final VoidCallback onFlag;
   final VoidCallback onDelete;
   const _TaskRow({
     required this.task,
     required this.onToggle,
     required this.onStart,
+    required this.onResetStart,
     required this.onFlag,
     required this.onDelete,
   });
@@ -1153,7 +1170,25 @@ class _TaskRowState extends State<_TaskRow> with SingleTickerProviderStateMixin 
               ),
             ),
             const SizedBox(width: 2),
-            _HoldFlag(flagged: task.flagged, onHeld: widget.onFlag),
+            // The flag, and right under it (only once Start has been pressed) a stop button that resets the start.
+            Column(mainAxisSize: MainAxisSize.min, children: [
+              _HoldFlag(flagged: task.flagged, onHeld: widget.onFlag),
+              if (task.startedAt != null)
+                GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: widget.onResetStart,
+                  child: Container(
+                    width: 22,
+                    height: 22,
+                    margin: const EdgeInsets.only(top: 2),
+                    decoration: BoxDecoration(
+                      color: cPaper,
+                      border: Border.all(color: cInk, width: 2),
+                    ),
+                    child: const Icon(Icons.stop, size: 12, color: cInk),
+                  ),
+                ),
+            ]),
           ]),
         ),
         ),
