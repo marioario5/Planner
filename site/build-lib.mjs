@@ -45,6 +45,7 @@ export function validateConfig({ url, token, password }) {
     }
   }
   if (!token || token.length < 16) problems.push('the planner token looks too short');
+  else if (/^(.{16,}?)\1+$/.test(token)) problems.push('the planner token looks pasted more than once (it is one string repeated)');
   if (!password) problems.push('the password is empty');
   return problems;
 }

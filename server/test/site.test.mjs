@@ -219,6 +219,9 @@ describe('site: the build and the locked page', () => {
     expect(validateConfig({ url: 'http://planner.example', token: TOKEN, password: PASSWORD })[0]).toContain('https://');
     expect(validateConfig({ url: 'http://127.0.0.1:8799', token: TOKEN, password: PASSWORD })).toEqual([]);
     expect(validateConfig({ url: URL_, token: 'short', password: PASSWORD })).toHaveLength(1);
+    const real = '0123456789abcdef0123456789abcdef0123456789abcdef'.replace(/^(.{16}).*$/, '$1') + 'f9e8d7c6b5a4f3e2d1c0b9a897867564534231ab';
+    expect(validateConfig({ url: URL_, token: real, password: PASSWORD })).toEqual([]);
+    expect(validateConfig({ url: URL_, token: real + real + real, password: PASSWORD })[0]).toContain('pasted more than once');
     expect(validateConfig({ url: URL_, token: TOKEN, password: '' })).toHaveLength(1);
   });
 
