@@ -1,5 +1,8 @@
 enum TaskTag { school, calculus3, sat, pcb, photography, college, other }
 
+/// Where a task is in its life. Every button's behavior follows from this (see [Task]).
+enum TaskPhase { idle, running, done }
+
 /// The planner's day starts at 4:00am, not midnight, because he works past midnight:
 /// 12:30am still belongs to the day that is ending. The server uses the same hour.
 const int dayStartHour = 4;
@@ -50,6 +53,50 @@ class Task {
     this.startedAt,
     this.flagged = false,
   });
+
+  // ── What the buttons do ────────────────────────────────────────────────────
+  //
+  //   phase    visible controls               tap START     tap FINISH / row    tap STOP   untick
+  //   idle     START                          -> running    -> done (no timer)  -         -
+  //   running  FINISH + stop (under flag)     -             -> done             -> idle    -
+  //   done     (just "started 4:20pm")        -             -                   -          -> idle
+  //
+  // - Ticking the row is the same as FINISH, and works from idle (a tick with no Start press has no
+  //   real duration, only the tick time).
+  // - Unticking always starts the task over: the Start press goes with it, so START shows again.
+  // - STOP only exists while running. It forgets the Start press; it never ticks or unticks.
+  // - The flag is separate: it survives every transition above.
+
+  TaskPhase get phase =>
+      done ? TaskPhase.done : (startedAt != null ? TaskPhase.running : TaskPhase.idle);
+
+  bool get canStart => phase == TaskPhase.idle;
+  bool get canFinish => phase == TaskPhase.running;
+  bool get canStop => phase == TaskPhase.running;
+
+  /// START: only from idle. Pressing it again while running keeps the first press.
+  void pressStart(DateTime now) {
+    if (phase == TaskPhase.idle) startedAt = now;
+  }
+
+  /// STOP: only while running; forgets the Start press.
+  void pressStop() {
+    if (phase == TaskPhase.running) startedAt = null;
+  }
+
+  /// FINISH, or ticking the row. Keeps the Start press so the server can work out the real duration.
+  void tick() {
+    done = true;
+  }
+
+  /// Unticking starts the task over.
+  void untick() {
+    done = false;
+    startedAt = null;
+  }
+
+  /// A tap on the row's checkbox/label.
+  void toggleDone() => done ? untick() : tick();
 
   /// "4:20pm" for when he pressed Start; null if he hasn't.
   String? get startedLabel {

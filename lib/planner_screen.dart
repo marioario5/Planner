@@ -230,20 +230,16 @@ class _PlannerScreenState extends State<PlannerScreen>
 
   Future<void> _toggleTask(Task task) async {
     HapticFeedback.lightImpact();
-    final newDone = !task.done;
+    final wasDone = task.done;
     final startedBefore = task.startedAt;
-    setState(() {
-      task.done = newDone;
-      // Unticking starts the task over: the old Start press goes with it, so START shows again.
-      if (!newDone) task.startedAt = null;
-    });
+    setState(task.toggleDone); // unticking also forgets the Start press (see Task)
 
-    final ok = await TasksService.setTaskCompleted(task, newDone);
+    final ok = await TasksService.setTaskCompleted(task, task.done);
     if (!ok && mounted) {
       // Couldn't reach the server — revert the checkbox so the UI
       // doesn't claim it's synced when it isn't.
       setState(() {
-        task.done = !newDone;
+        task.done = wasDone;
         task.startedAt = startedBefore;
         _error = "Couldn't sync that change";
       });
@@ -253,7 +249,7 @@ class _PlannerScreenState extends State<PlannerScreen>
   /// Pressing Start records when he really began, so the planner learns how long blocks take.
   Future<void> _startTask(Task task) async {
     HapticFeedback.mediumImpact();
-    setState(() => task.startedAt = DateTime.now());
+    setState(() => task.pressStart(DateTime.now()));
     final ok = await TasksService.setTaskStarted(task, true);
     if (!ok && mounted) {
       setState(() {
@@ -267,7 +263,7 @@ class _PlannerScreenState extends State<PlannerScreen>
   Future<void> _resetStart(Task task) async {
     HapticFeedback.mediumImpact();
     final before = task.startedAt;
-    setState(() => task.startedAt = null);
+    setState(task.pressStop);
     final ok = await TasksService.setTaskStarted(task, false);
     if (!ok && mounted) {
       setState(() {
@@ -722,7 +718,7 @@ class _PlannerScreenState extends State<PlannerScreen>
         )
       else
         Column(
-          children: tasks.map((t) => _TaskRow(
+          children: tasks.map((t) => TaskRow(
             task: t,
             onToggle: () => _toggleTask(t),
             onStart: () => _startTask(t),
@@ -976,14 +972,16 @@ class _PlannerScreenState extends State<PlannerScreen>
 }
 
 // ── Task Row ────────────────────────────────────────────────────────────────
-class _TaskRow extends StatefulWidget {
+/// One line of the receipt: checkbox, title, Start/Finish, tag, and the flag with the stop button under it.
+class TaskRow extends StatefulWidget {
   final Task task;
   final VoidCallback onToggle;
   final VoidCallback onStart;
   final VoidCallback onResetStart;
   final VoidCallback onFlag;
   final VoidCallback onDelete;
-  const _TaskRow({
+  const TaskRow({
+    super.key,
     required this.task,
     required this.onToggle,
     required this.onStart,
@@ -993,10 +991,10 @@ class _TaskRow extends StatefulWidget {
   });
 
   @override
-  State<_TaskRow> createState() => _TaskRowState();
+  State<TaskRow> createState() => _TaskRowState();
 }
 
-class _TaskRowState extends State<_TaskRow> with SingleTickerProviderStateMixin {
+class _TaskRowState extends State<TaskRow> with SingleTickerProviderStateMixin {
   bool _showNotes = false;
 
   /// Pulses the row yellow while it is flagged.
@@ -1012,7 +1010,7 @@ class _TaskRowState extends State<_TaskRow> with SingleTickerProviderStateMixin 
   }
 
   @override
-  void didUpdateWidget(covariant _TaskRow old) {
+  void didUpdateWidget(covariant TaskRow old) {
     super.didUpdateWidget(old);
     if (widget.task.flagged && !_pulse.isAnimating) {
       _pulse.repeat(reverse: true);
@@ -1030,7 +1028,7 @@ class _TaskRowState extends State<_TaskRow> with SingleTickerProviderStateMixin 
 
   /// Start / Finish under the title: Start records when he really began; Finish ticks it off.
   Widget _startFinish(Task task) {
-    if (task.done) {
+    if (task.phase == TaskPhase.done) {
       final label = task.startedLabel;
       if (label == null) return const SizedBox.shrink();
       return Padding(
@@ -1039,7 +1037,7 @@ class _TaskRowState extends State<_TaskRow> with SingleTickerProviderStateMixin 
             style: _px(5, cInkLight.withValues(alpha: 0.6), height: 1.6)),
       );
     }
-    final started = task.startedAt != null;
+    final started = task.canFinish;
     final color = tagColor(task.tag);
     return Padding(
       padding: const EdgeInsets.only(top: 5),
@@ -1187,7 +1185,7 @@ class _TaskRowState extends State<_TaskRow> with SingleTickerProviderStateMixin 
             // The flag, and right under it (only while a started task is still running) a stop button that resets the start.
             Column(mainAxisSize: MainAxisSize.min, children: [
               _HoldFlag(flagged: task.flagged, onHeld: widget.onFlag),
-              if (task.startedAt != null && !task.done)
+              if (task.canStop)
                 GestureDetector(
                   behavior: HitTestBehavior.opaque,
                   onTap: widget.onResetStart,
