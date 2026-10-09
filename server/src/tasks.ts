@@ -207,7 +207,7 @@ export interface TaskStore {
   getHabitNotes(version?: number): Promise<HabitNotes | null>;
   /** Saved versions, newest first. */
   listHabitVersions(): Promise<HabitVersion[]>;
-  /** How the day felt, 1 (rough) to 5 (great), or null. */
+  /** How draining the day felt, 1 (drained) to 5 (good, energy left), or null. */
   getRating(date: string): Promise<number | null>;
   /** null clears it. */
   setRating(date: string, rating: number | null): Promise<void>;

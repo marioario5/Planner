@@ -787,10 +787,11 @@ class _PlannerScreenState extends State<PlannerScreen>
     ]);
   }
 
-  /// "How was today?": five squares, 1 (rough) to 5 (great). Tap the chosen one again to clear it.
+  /// "How did today feel?": five squares, 1 (drained) to 5 (good, energy left): strain and energy, not grades or
+/// mood. Tap the chosen one again to clear it.
   Widget _ratingRow() {
     return Column(children: [
-      Text('HOW WAS TODAY?', style: _px(5, cInkLight, letterSpacing: 0.5)),
+      Text('HOW DID TODAY FEEL?', style: _px(5, cInkLight, letterSpacing: 0.5)),
       const SizedBox(height: 8),
       Row(
         mainAxisAlignment: MainAxisAlignment.center,
@@ -816,8 +817,8 @@ class _PlannerScreenState extends State<PlannerScreen>
       ),
       const SizedBox(height: 6),
       Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        Text('rough', style: _px(4, cInkLight.withValues(alpha: 0.7))),
-        Text('great', style: _px(4, cInkLight.withValues(alpha: 0.7))),
+        Text('drained', style: _px(4, cInkLight.withValues(alpha: 0.7))),
+        Text('good', style: _px(4, cInkLight.withValues(alpha: 0.7))),
       ]),
     ]);
   }

@@ -298,6 +298,7 @@ describe('ratings', () => {
     ]);
     const h = computeHabits(tasks, TZ, TODAY, 28, ratings);
     expect(h.ratings).toEqual({
+      scale: expect.stringContaining('drained'),
       n: 2,
       avg: 3,
       recent: [

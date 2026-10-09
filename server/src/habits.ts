@@ -154,8 +154,8 @@ export interface HabitStats {
   capacity: { weekday: Capacity | null; weekend: Capacity | null };
   /** How heavy the last 7 days were, with the plain-language reasons. Use it to keep a week from getting too heavy. */
   week_load: WeekLoad;
-  /** How his days felt (1 rough to 5 great), over the finished days in the window. */
-  ratings: { n: number; avg: number; recent: { date: string; rating: number }[] } | null;
+  /** How draining his days felt (1 drained and wrecked, 5 good with energy left): strain and energy, not grades or mood. */
+  ratings: { scale: string; n: number; avg: number; recent: { date: string; rating: number }[] } | null;
   data_quality: {
     days_ticked_in_bulk: number;
     bulk_ticked_tasks: number;
@@ -193,6 +193,7 @@ export interface WeekLoad {
 }
 
 // A week counts as heavier when these hold; two reasons = heavy, one = elevated.
+export const RATING_SCALE = '1 = drained and wrecked, 5 = good with energy left (strain and energy, not grades or mood)';
 const WEEK_DAYS = 7;
 const WEEK_MIN_DAYS = 4;
 const SUSTAINED_DAYS = 5; // worked more than his typical amount on this many days
@@ -454,6 +455,7 @@ export function computeHabits(
   const rated = [...ratings.entries()].filter(([date]) => date >= from && date <= through).sort(([a], [b]) => (a < b ? -1 : 1));
   const ratingStats = rated.length
     ? {
+        scale: RATING_SCALE,
         n: rated.length,
         avg: Math.round((10 * rated.reduce((n, [, r]) => n + r, 0)) / rated.length) / 10,
         recent: rated.slice(-7).map(([date, rating]) => ({ date, rating })),
