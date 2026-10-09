@@ -247,11 +247,8 @@ describe('site: the build and the locked page', () => {
   /** Runs the served page's own script against a tiny fake document, like a browser would. */
   async function runPage(html, typed) {
     const scripts = [...html.matchAll(/<script>([\s\S]*?)<\/script>/g)].map((m) => m[1]);
-    const els = {
-      f: { listeners: {}, addEventListener(t, fn) { this.listeners[t] = fn; } },
-      q: { value: '' },
-      r: { textContent: '' },
-    };
+    const stub = () => ({ listeners: {}, value: '', textContent: '', addEventListener(t, fn) { this.listeners[t] = fn; } });
+    const els = { f: stub(), q: stub(), r: stub(), m: stub() };
     const written = [];
     const document = {
       getElementById: (id) => els[id],
@@ -262,15 +259,17 @@ describe('site: the build and the locked page', () => {
     const ctx = vm.createContext({ document, crypto: globalThis.crypto, atob, TextEncoder, TextDecoder, Uint8Array, Promise });
     for (const s of scripts) vm.runInContext(s, ctx);
     els.q.value = typed;
+    els.q.listeners.input?.();
     els.f.listeners.submit({ preventDefault() {} });
     await new Promise((r) => setTimeout(r, 1500)); // PBKDF2 takes a moment
-    return { out: els.r.textContent, written };
+    return { out: els.r.textContent, mask: els.m.textContent, written };
   }
 
   it('a wrong guess behaves like an ordinary empty search: no error, no hint, nothing written', async () => {
     const { html } = await getBuilt();
-    const { out, written } = await runPage(html, 'hello');
-    expect(out).toBe('No results for “hello”');
+    const { out, mask, written } = await runPage(html, 'hello');
+    expect(out).toBe('no results');
+    expect(mask).toBe('*****'); // what he types is shown as stars, never as text
     expect(written).toEqual([]);
   });
 

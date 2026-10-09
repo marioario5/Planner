@@ -2,36 +2,78 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="robots" content="noindex, nofollow">
 <title>Search</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Press+Start+2P&display=swap" rel="stylesheet">
 <style>
-  :root { color-scheme: light dark; }
+  :root { --paper: #FFF8EE; --shadow: #EDE0CC; --ink: #2D1B00; --ink-light: #5C3D1E; --bg: #C8B89A; --bg-dark: #A8966E; --z: 1.4; }
   * { box-sizing: border-box; }
-  body { margin: 0; font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; background: #fff; color: #202124; }
-  @media (prefers-color-scheme: dark) { body { background: #202124; color: #e8eaed; } }
-  main { max-width: 640px; margin: 0 auto; padding: 18vh 16px 32px; }
-  input { width: 100%; padding: 12px 16px; font: inherit; color: inherit; background: transparent; border: 1px solid #9aa0a6; border-radius: 24px; outline: none; }
-  input:focus { border-color: #1a73e8; }
-  #r { margin-top: 24px; color: #5f6368; }
-  @media (prefers-color-scheme: dark) { #r { color: #9aa0a6; } }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--ink); overflow: hidden; }
+  body {
+    font-family: "Press Start 2P", ui-monospace, "Courier New", monospace; font-size: 8px; line-height: 1.8;
+    background-image: linear-gradient(rgba(0, 0, 0, 0.055) 1px, transparent 1px), linear-gradient(90deg, rgba(0, 0, 0, 0.055) 1px, transparent 1px);
+    background-size: 32px 32px; background-position: center;
+  }
+  #deco { position: fixed; inset: 0; pointer-events: none; overflow: hidden; }
+  #deco span { position: absolute; text-shadow: 1px 2px 2px rgba(0, 0, 0, 0.19); }
+  main { position: relative; min-height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 24px 16px 12vh; zoom: var(--z); }
+  .caption { font-size: 7px; letter-spacing: 2px; color: rgba(74, 55, 40, 0.55); margin-bottom: 16px; }
+  #printer { width: 320px; height: 108px; max-width: 100%; image-rendering: pixelated; }
+  form { margin: 22px 0 0; width: 100%; max-width: 260px; }
+  .field { position: relative; background: var(--paper); border: 2px solid var(--ink); box-shadow: 3px 3px 0 var(--bg-dark); }
+  .field input, .field .mask {
+    display: block; width: 100%; margin: 0; padding: 12px 12px; border: 0; border-radius: 0; background: transparent;
+    font: inherit; font-size: 8px; letter-spacing: 1px; line-height: 14px; height: 38px; outline: none;
+  }
+  .field input { color: transparent; caret-color: var(--ink); -webkit-text-fill-color: transparent; }
+  .field input::placeholder { color: rgba(92, 61, 30, 0.55); -webkit-text-fill-color: rgba(92, 61, 30, 0.55); }
+  .field input::selection { background: rgba(212, 168, 67, 0.45); }
+  .field .mask { position: absolute; inset: 0; pointer-events: none; color: var(--ink); white-space: pre; overflow: hidden; }
+  .field:focus-within { box-shadow: 3px 3px 0 var(--ink-light); }
+  #r { margin-top: 18px; min-height: 16px; font-size: 7px; letter-spacing: 1px; color: var(--ink-light); text-align: center; }
 </style>
 </head>
 <body>
+<div id="deco"></div>
 <main>
+<div class="caption">&#10022; search &#10022;</div>
+<canvas id="printer" width="320" height="108" aria-hidden="true"></canvas>
 <form id="f" role="search" autocomplete="off">
-<input id="q" type="search" name="q" placeholder="Search" aria-label="Search" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="search" autofocus>
+<div class="field">
+<input id="q" type="text" name="q" placeholder="search" aria-label="Search" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="search" autofocus>
+<div id="m" class="mask" aria-hidden="true"></div>
+</div>
 </form>
 <div id="r" aria-live="polite"></div>
 </main>
 <script>
 __UNLOCK_JS__
+__PRINTER_JS__
 (function () {
   var blob = "__BLOB__";
   var form = document.getElementById('f');
   var input = document.getElementById('q');
+  var mask = document.getElementById('m');
   var out = document.getElementById('r');
   var busy = false;
+  function sync() { mask.textContent = new Array(input.value.length + 1).join('*'); }
+  input.addEventListener('input', sync);
+  var width = typeof window === 'object' ? window.innerWidth : 1000;
+  if (document.documentElement) document.documentElement.style.setProperty('--z', String(Math.max(1.2, Math.min(1.6, width / 360))));
+  var decos = [['☕', 0.04, 0.34, -14, 1.1], ['🌵', 0.06, 0.66, 8, 0.95], ['🕯️', 0.82, 0.28, 12, 1.0], ['🍪', 0.85, 0.62, -9, 1.05], ['📓', 0.08, 0.84, -18, 0.9], ['🌿', 0.8, 0.82, 22, 1.1], ['⭐', 0.9, 0.12, -5, 0.8], ['🍵', 0.03, 0.12, 10, 0.85]];
+  var box = document.getElementById('deco');
+  if (box && box.appendChild) {
+    decos.forEach(function (d) {
+      var s = document.createElement('span');
+      s.textContent = d[0];
+      s.setAttribute('style', 'left:' + d[1] * 100 + '%;top:' + d[2] * 100 + '%;font-size:' + 22 * d[4] + 'px;transform:rotate(' + d[3] + 'deg)');
+      box.appendChild(s);
+    });
+  }
+  startPrinter(document.getElementById('printer'));
   form.addEventListener('submit', function (e) {
     e.preventDefault();
     var q = input.value;
@@ -45,7 +87,7 @@ __UNLOCK_JS__
         document.write(html);
         document.close();
       } else {
-        out.textContent = 'No results for “' + q + '”';
+        out.textContent = 'no results';
       }
     });
   });

@@ -60,7 +60,8 @@ export async function buildSite({ url, token, password }) {
 
   const logic = asScript(read('src/logic.mjs'), 'logic.mjs');
   const ui = read('src/ui.js');
-  const appJs = withoutLineComments(logic) + '\n' + withoutLineComments(ui);
+  const printer = withoutLineComments(read('src/printer.js'));
+  const appJs = withoutLineComments(logic) + '\n' + printer + '\n' + withoutLineComments(ui);
   if (/<\/script/i.test(appJs)) throw new Error('the app script must not contain a closing script tag');
 
   const cfg = JSON.stringify({ url: url.replace(/\/+$/, ''), token }).replace(/</g, '\\u003c');
@@ -82,6 +83,7 @@ export async function buildSite({ url, token, password }) {
   const unlockJs = withoutLineComments(asScript(read('src/crypto.mjs'), 'crypto.mjs'));
   let html = read('src/shell.html');
   html = insert(html, '__UNLOCK_JS__', unlockJs);
+  html = insert(html, '__PRINTER_JS__', printer);
   html = insert(html, '__BLOB__', blob);
   if (html.includes(token) || html.includes(url)) throw new Error('the served page must not contain the token or the address');
   return { html, appHtml };
