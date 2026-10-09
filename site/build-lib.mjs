@@ -63,8 +63,15 @@ export async function buildSite({ url, token, password }) {
   if (/<\/script/i.test(appJs)) throw new Error('the app script must not contain a closing script tag');
 
   const cfg = JSON.stringify({ url: url.replace(/\/+$/, ''), token }).replace(/</g, '\\u003c');
+  let vibes = [];
+  try {
+    vibes = JSON.parse(readFileSync(join(here, '..', 'assets', 'vibes.json'), 'utf8')).vibes ?? [];
+  } catch {
+    // the daily verse is optional
+  }
   let appHtml = read('src/app.html');
   appHtml = insert(appHtml, '__CFG__', cfg);
+  appHtml = insert(appHtml, '__VIBES__', JSON.stringify(vibes).replace(/</g, '\\u003c'));
   appHtml = insert(appHtml, '__APP_JS__', appJs);
 
   const blob = encryptBlob(password, appHtml);

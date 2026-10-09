@@ -17,6 +17,8 @@ The password is never written to any file. It only exists while you run the buil
 ## Build and publish
 
 ```bash
+cd server && npm run site:build     # from the server folder
+# or, from the repo's top folder:
 node site/build.mjs
 ```
 

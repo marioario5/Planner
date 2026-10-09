@@ -1,10 +1,10 @@
 // The planner website's screen. It runs inside the unlocked page, after logic.mjs (inlined above it by build.mjs), so
 // everything exported there is a plain global here. All task rules come from logic.mjs; this file only draws and wires.
+// The look follows the phone app: drifting grid, a pixel-art printer with blinking lights, a receipt that feeds out of it.
 
 (function () {
   var cfg = window.__CFG;
   var api = createApi({ baseUrl: cfg.url, token: cfg.token, fetchImpl: function (u, i) { return fetch(u, i); } });
-  var root = document.getElementById('app');
 
   var state = {
     date: null,
@@ -15,7 +15,8 @@
     plan: 'A',
     error: null,
     loaded: false,
-    lastSync: null,
+    loading: false,
+    printed: false,
     notesOpen: {},
     sheet: null,
     ticks: {},
@@ -23,9 +24,11 @@
   var pending = {}; // task id -> number of changes still on their way to the server
   var queues = {}; // task id -> promise chain, so rapid taps reach the server in order
   var holding = false; // a flag is being held: don't redraw under the finger
+  var feed = null; // the paper wrapper once it exists
 
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   var DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+  var NS = 'http://www.w3.org/2000/svg';
 
   function h(tag, attrs) {
     var el = document.createElement(tag);
@@ -47,11 +50,134 @@
     return el;
   }
 
+  function svg(tag, attrs) {
+    var el = document.createElementNS(NS, tag);
+    Object.keys(attrs || {}).forEach(function (k) { el.setAttribute(k, attrs[k]); });
+    for (var i = 2; i < arguments.length; i++) el.appendChild(arguments[i]);
+    return el;
+  }
+
+  var $ = function (id) { return document.getElementById(id); };
+
   function dateLabel() {
     if (!state.date) return '';
     var p = state.date.split('-').map(Number);
     var d = new Date(Date.UTC(p[0], p[1] - 1, p[2]));
     return DAYS[d.getUTCDay()] + ', ' + MONTHS[d.getUTCMonth()] + ' ' + d.getUTCDate();
+  }
+
+  // ---- the scenery: zoom, drifting grid, scattered decorations, the printer ----
+  function setZoom() {
+    var z = Math.max(1.2, Math.min(1.7, window.innerWidth / 300));
+    document.documentElement.style.setProperty('--z', String(z));
+  }
+
+  function startGrid() {
+    var canvas = $('grid');
+    var ctx = canvas.getContext('2d');
+    var ox = 0, oy = 0, angle = 12, vx = 0, vy = 0, va = 0, tvx = 0, tvy = 0, tva = 0, frame = 0;
+    var last = 0;
+    function resize() {
+      var r = window.devicePixelRatio || 1;
+      canvas.width = Math.floor(window.innerWidth * r);
+      canvas.height = Math.floor(window.innerHeight * r);
+      ctx.setTransform(r, 0, 0, r, 0, 0);
+    }
+    function tickGrid(t) {
+      requestAnimationFrame(tickGrid);
+      if (t - last < 32) return;
+      last = t;
+      frame++;
+      if (frame % 350 === 0) {
+        tvx = (Math.random() - 0.5) * 2 * 0.25;
+        tvy = (Math.random() - 0.5) * 2 * 0.25;
+        tva = (Math.random() - 0.5) * 2 * 0.003;
+      }
+      vx += (tvx - vx) * 0.002; vy += (tvy - vy) * 0.002; va += (tva - va) * 0.002;
+      ox += vx; oy += vy;
+      angle = Math.max(8, Math.min(16, angle + va));
+      var w = window.innerWidth, hgt = window.innerHeight;
+      ctx.fillStyle = '#C8B89A';
+      ctx.fillRect(0, 0, w, hgt);
+      ctx.save();
+      ctx.strokeStyle = 'rgba(0,0,0,0.055)';
+      ctx.lineWidth = 1;
+      ctx.translate(w / 2 + ox, hgt / 2 + oy);
+      ctx.rotate(angle * Math.PI / 180);
+      ctx.translate(-w, -hgt);
+      ctx.beginPath();
+      for (var x = 0; x < w * 4; x += 32) { ctx.moveTo(x, 0); ctx.lineTo(x, hgt * 4); }
+      for (var y = 0; y < hgt * 4; y += 32) { ctx.moveTo(0, y); ctx.lineTo(w * 4, y); }
+      ctx.stroke();
+      ctx.restore();
+    }
+    resize();
+    window.addEventListener('resize', resize);
+    requestAnimationFrame(tickGrid);
+  }
+
+  function addDecorations() {
+    var decos = [
+      ['☕', 0.02, 0.38, -14, 1.1], ['🌵', 0.05, 0.65, 8, 0.95],
+      ['🕯️', 0.78, 0.30, 12, 1.0], ['🍪', 0.82, 0.60, -9, 1.05],
+      ['📓', 0.06, 0.82, -18, 0.9], ['🌿', 0.80, 0.80, 22, 1.1],
+      ['⭐', 0.88, 0.12, -5, 0.8], ['🍵', 0.01, 0.14, 10, 0.85],
+    ];
+    var box = $('deco');
+    decos.forEach(function (d) {
+      var s = h('span', { style: 'left:' + d[1] * 100 + '%;top:' + d[2] * 100 + '%;font-size:' + 22 * d[4] + 'px;transform:rotate(' + d[3] + 'deg)' }, d[0]);
+      box.appendChild(s);
+    });
+  }
+
+  // Port of lib/printer_painter.dart: an 80 x 27 pixel-art printer, four screen pixels per printer pixel.
+  function startPrinter() {
+    var canvas = $('printer');
+    var ctx = canvas.getContext('2d');
+    var P = 4;
+    var C = { darkest: '#1a0d00', dark: '#2e1a08', body: '#4A3728', base: '#6B5040', light: '#8C6B52', tan: '#b89070', slot: '#0d0600', paper: '#FFF8EE', rose: '#E8A0A0', rosehi: '#f0c0c0', rosedark: '#a06060', sage: '#8BAF7C', amber: '#D4A843', red: '#c97a7a' };
+    function px(x, y, color, w, hh) { ctx.fillStyle = color; ctx.fillRect(x * P, y * P, (w || 1) * P, (hh || 1) * P); }
+    function draw(phase) {
+      ctx.clearRect(0, 0, 320, 108);
+      px(0, 4, C.base, 80, 20);
+      px(0, 0, C.light, 80, 3);
+      px(0, 3, C.body, 80, 1);
+      var row, col;
+      for (row = 0; row < 24; row++) { px(0, row, row < 4 ? C.tan : C.light); px(79, row, C.dark); }
+      for (col = 5; col < 75; col++) { px(col, 23, C.dark); px(col, 24, C.darkest); px(col, 25, C.darkest); }
+      for (col = 5; col < 18; col++) { px(col, 24, C.body); px(col, 25, C.dark); px(col, 26, C.darkest); }
+      for (col = 62; col < 75; col++) { px(col, 24, C.body); px(col, 25, C.dark); px(col, 26, C.darkest); }
+      for (col = 24; col < 56; col++) { px(col, 20, C.slot); px(col, 21, C.paper); px(col, 22, C.dark); }
+      px(23, 20, C.dark); px(56, 20, C.dark); px(23, 21, C.dark); px(56, 21, C.dark);
+      var bx, by;
+      for (bx = 6; bx < 13; bx++) {
+        for (by = 7; by < 11; by++) {
+          var shade = C.rose;
+          if (bx === 6 || by === 7) shade = C.rosehi;
+          if (bx === 12 || by === 10) shade = C.rosedark;
+          px(bx, by, shade);
+        }
+      }
+      for (var v = 0; v < 3; v++) {
+        var vy = 7 + v * 3;
+        for (col = 16; col < 26; col++) { px(col, vy, C.dark); px(col, vy + 1, C.body); }
+      }
+      var f = Math.floor(phase * 100);
+      var greenOn = (f % 62) < 55;
+      var amberOn = (f % 36) < 18;
+      var lx, ly;
+      for (lx = 66; lx < 68; lx++) for (ly = 7; ly < 9; ly++) px(lx, ly, greenOn ? C.sage : C.body);
+      [[65, 7], [68, 7], [66, 6], [66, 9], [67, 6], [67, 9]].forEach(function (p) { px(p[0], p[1], C.dark); });
+      for (lx = 69; lx < 71; lx++) for (ly = 7; ly < 9; ly++) px(lx, ly, amberOn ? C.amber : C.body);
+      [[68, 7], [71, 7], [69, 6], [69, 9], [70, 6], [70, 9]].forEach(function (p) { px(p[0], p[1], C.dark); });
+      for (lx = 72; lx < 74; lx++) for (ly = 7; ly < 9; ly++) px(lx, ly, C.red);
+      [[71, 7], [74, 7], [72, 6], [72, 9], [73, 6], [73, 9]].forEach(function (p) { px(p[0], p[1], C.dark); });
+    }
+    var start = performance.now();
+    (function loop(t) {
+      requestAnimationFrame(loop);
+      draw(((t - start) % 4000) / 4000);
+    })(start);
   }
 
   // ---- checklist ticks inside info sections (kept on this device, per day) ----
@@ -62,6 +188,19 @@
   function saveTicks() {
     try { localStorage.setItem(ticksKey(), JSON.stringify(state.ticks)); } catch (e) { /* storage may be blocked */ }
   }
+
+  function vibe() {
+    var list = window.__VIBES || [];
+    var today = new Date().toDateString();
+    try {
+      var saved = JSON.parse(localStorage.getItem('planner-vibe') || 'null');
+      if (saved && saved.d === today) return saved.t;
+    } catch (e) { /* ignore */ }
+    var pick = list.length ? list[Math.floor(Math.random() * list.length)] : 'Matthew 11:29';
+    try { localStorage.setItem('planner-vibe', JSON.stringify({ d: today, t: pick })); } catch (e) { /* ignore */ }
+    return pick;
+  }
+  var todaysVibe = vibe();
 
   // ---- talking to the server ----
   function touch(id, delta) {
@@ -94,9 +233,10 @@
     });
   }
 
-  function refresh(silent) {
+  /** Fetches today's plan. `print` feeds the paper out of the printer (the first load and the REPRINT button). */
+  function refresh(print) {
     if (holding) return Promise.resolve();
-    if (!silent) { state.error = null; render(); }
+    if (print) { state.loading = true; state.error = null; render(); }
     return api.getDay().then(function (day) {
       var dateChanged = state.date !== day.date;
       state.date = day.date;
@@ -108,9 +248,13 @@
       state.plan = choosePlan(state.tasks, state.plan);
       state.error = null;
       state.loaded = true;
-      state.lastSync = new Date();
+      state.loading = false;
+      var firstPrint = !state.printed;
+      state.printed = true;
       render();
+      if (print || firstPrint) feedPaper();
     }).catch(function (e) {
+      state.loading = false;
       state.error = e && e.message ? e.message : "can't reach server";
       render();
     });
@@ -130,9 +274,10 @@
     });
   }
 
-  // ---- drawing ----
+  // ---- drawing the receipt ----
   function planTasks() { return state.tasks.filter(function (t) { return t.plan === state.plan; }); }
   function hasPlanB() { return state.tasks.some(function (t) { return t.plan === 'B'; }); }
+  function dash(dark, tight) { return h('div', { class: 'dash' + (dark ? ' dark' : '') + (tight ? ' tight' : '') }); }
 
   function planChip(p) {
     var starts = state.tasks.filter(function (t) { return t.plan === p && t.start; }).map(function (t) { return t.start; }).sort();
@@ -142,18 +287,10 @@
 
   function flagButton(task) {
     var timer = null;
+    var flagIcon = svg('svg', { viewBox: '0 0 24 24' }, svg('path', { d: 'M14.4 6 14 4H5v17h2v-7h5.6l.4 2h7V6z' }));
     var btn = h('button', { class: 'flagbtn' + (task.flagged ? ' on' : ''), 'aria-label': task.flagged ? 'Hold to clear flag' : 'Hold 2 seconds to flag' },
-      (function () {
-        var ns = 'http://www.w3.org/2000/svg';
-        var svg = document.createElementNS(ns, 'svg');
-        svg.setAttribute('viewBox', '0 0 28 28');
-        var c = document.createElementNS(ns, 'circle');
-        c.setAttribute('class', 'ring');
-        c.setAttribute('cx', '14'); c.setAttribute('cy', '14'); c.setAttribute('r', '11');
-        svg.appendChild(c);
-        return svg;
-      })(),
-      h('span', { class: 'f' }, '⚑'));
+      svg('svg', { viewBox: '0 0 28 28' }, svg('circle', { class: 'ring', cx: '14', cy: '14', r: '11' })),
+      h('span', { class: 'f' }, flagIcon));
     function start(e) {
       e.preventDefault();
       e.stopPropagation();
@@ -190,7 +327,7 @@
     var ctl = null;
     if (ph === 'done') {
       var s = startedLabel(task);
-      if (s) ctl = h('div', { class: 'ctl' }, h('span', { class: 'startedtxt' }, 'started ' + s));
+      if (s) ctl = h('div', { class: 'startedtxt' }, 'started ' + s);
     } else {
       ctl = h('div', { class: 'ctl' },
         h('button', {
@@ -227,11 +364,57 @@
         task.notes && open ? h('div', { class: 'notes', style: 'border-color:' + color }, task.notes) : null),
       h('div', { class: 'side' },
         h('span', { class: 'tag', style: 'color:' + color + ';border-color:' + color }, TAG_LABEL[task.tag]),
-        flagButton(task),
-        stopBtn));
+        h('div', { class: 'flagcol' }, flagButton(task), stopBtn)));
   }
 
-  function sheet() {
+  function receiptContent() {
+    var tasks = planTasks();
+    var total = tasks.length;
+    var done = tasks.filter(function (t) { return t.done; }).length;
+    var msg = progressMessage(done, total);
+    var kids = [
+      h('p', { class: 'h1' }, "Today's Tasks"),
+      h('div', { class: 'leaf' }, '🌿 ☕ 🌿'),
+      h('p', { class: 'date' }, dateLabel()),
+      dash(true),
+      h('div', { class: 'mood' }, h('i'), h('span', {}, todaysVibe), h('i')),
+      dash(false, true),
+    ];
+    if (state.headline) kids.push(h('p', { class: 'headline' }, state.headline), dash(false, true));
+    if (hasPlanB()) kids.push(h('div', { class: 'chips' }, planChip('A'), planChip('B')));
+    if (tasks.length === 0) {
+      kids.push(h('div', { class: 'empty' }, hasPlanB() ? 'nothing in plan ' + state.plan : 'no tasks found!\nenjoy the free time ✦'));
+      return kids;
+    }
+    tasks.forEach(function (t) { kids.push(taskRow(t)); });
+    kids.push(dash(false, true));
+    kids.push(h('div', { class: 'progress-h' }, h('span', {}, 'PROGRESS'), h('span', {}, done + ' / ' + total)));
+    var bars = h('div', { class: 'bars' });
+    for (var i = 0; i < total; i++) bars.appendChild(h('i', { class: i < done ? 'on' : '' }));
+    kids.push(bars);
+    if (msg) kids.push(h('div', { class: 'msg' }, msg));
+    kids.push(dash(false, true));
+    var nums = h('div', { class: 'nums' });
+    [1, 2, 3, 4, 5].forEach(function (n) {
+      nums.appendChild(h('button', { class: state.rating === n ? 'on' : '', onclick: function () { setRating(n); } }, String(n)));
+    });
+    kids.push(h('div', { class: 'rate' },
+      h('h3', {}, 'HOW DID TODAY FEEL?'),
+      nums,
+      h('div', { class: 'ends' }, h('span', {}, 'drained'), h('span', {}, 'good'))));
+    kids.push(h('div', { class: 'hint' }, 'forgot to start or finish on time?\nhold the flag 2 seconds'));
+    return kids;
+  }
+
+  /** "2/4" for a section that has checklist items, else ''. */
+  function checkProgress(sec) {
+    var items = parseSectionBody(sec.body).filter(function (l) { return l.kind === 'check'; });
+    if (!items.length) return '';
+    var n = items.filter(function (l) { return state.ticks[sec.title + '|' + l.text]; }).length;
+    return n + '/' + items.length + ' ';
+  }
+
+  function dialog() {
     var sec = state.sheet;
     if (!sec) return null;
     function close() { state.sheet = null; render(); }
@@ -244,73 +427,95 @@
         h('span', {}, l.text));
     });
     return h('div', { class: 'modal', onclick: function (e) { if (e.target === e.currentTarget) close(); } },
-      h('div', { class: 'sheet' }, h('h2', {}, sec.title), lines, h('button', { class: 'close', onclick: close }, 'CLOSE')));
+      h('div', { class: 'dialog' }, h('h2', {}, sec.title), lines, h('div', { class: 'actions' }, h('button', { class: 'close', onclick: close }, 'CLOSE'))));
+  }
+
+  var receipt = null; // the receipt element once the paper exists
+
+  function ensurePaper() {
+    if (receipt) return;
+    receipt = h('div', { class: 'receipt' });
+    var inner = h('div', { class: 'sheet-in' },
+      h('div', { class: 'perf' }, h('i'), h('b'), h('i'), h('b'), h('i')),
+      receipt,
+      h('div', { class: 'tear' }),
+      h('div', { class: 'shadowbar' }));
+    feed = h('div', { class: 'feed done' }, inner);
+    var zone = $('paperzone');
+    zone.replaceChildren(feed);
+  }
+
+  /** The receipt feeds down out of the printer: its bottom shows first and the rest follows, like a real printer. */
+  function feedPaper() {
+    ensurePaper();
+    var inner = feed.firstChild;
+    feed.classList.remove('done');
+    feed.style.transition = 'none';
+    feed.style.height = '0px';
+    void feed.offsetHeight;
+    var full = inner.offsetHeight;
+    feed.style.transition = 'height 4s cubic-bezier(0, 0, 0.2, 1)';
+    feed.style.height = full + 'px';
+    var finished = false;
+    function end() {
+      if (finished) return;
+      finished = true;
+      feed.style.transition = 'none';
+      feed.style.height = 'auto';
+      feed.classList.add('done');
+    }
+    feed.addEventListener('transitionend', end, { once: true });
+    setTimeout(end, 4300);
   }
 
   function render() {
-    var tasks = planTasks();
-    var total = tasks.length;
-    var done = tasks.filter(function (t) { return t.done; }).length;
-    var msg = progressMessage(done, total);
-
-    var kids = [];
-    kids.push(h('div', { class: 'top' },
-      h('span', {}, state.lastSync ? 'synced ' + formatClock(String(state.lastSync.getHours()).padStart(2, '0') + ':' + String(state.lastSync.getMinutes()).padStart(2, '0')) : 'connecting...'),
-      h('button', { onclick: function () { refresh(false); } }, 'REFRESH')));
-    if (state.error) kids.push(h('div', { class: 'err' }, state.error));
-
-    if (!state.loaded) {
-      kids.push(h('div', { class: 'paper' }, h('div', { class: 'empty' }, state.error ? '' : 'loading...')));
+    // paper
+    if (!state.printed) {
+      var zone = $('paperzone');
+      if (!zone.firstChild || zone.firstChild.className !== 'hello') {
+        zone.replaceChildren(h('div', { class: 'hello' }, state.error ? '' : 'fetching your tasks...'));
+      }
     } else {
-      var paper = h('div', { class: 'paper' });
-      paper.appendChild(h('p', { class: 'date' }, dateLabel()));
-      paper.appendChild(h('p', { class: 'sub' }, 'planner'));
-      if (state.headline) {
-        paper.appendChild(h('p', { class: 'headline' }, state.headline));
-        paper.appendChild(h('hr', { class: 'dash' }));
-      }
-      if (hasPlanB()) paper.appendChild(h('div', { class: 'chips' }, planChip('A'), planChip('B')));
-      if (state.sections.length) {
-        paper.appendChild(h('div', { class: 'sections' }, state.sections.map(function (s) {
-          return h('button', { class: 'sec', onclick: function () { state.sheet = s; render(); } }, s.title);
-        })));
-      }
-      if (tasks.length === 0) {
-        paper.appendChild(h('div', { class: 'empty' }, hasPlanB() ? 'nothing in plan ' + state.plan : 'no tasks found!\nenjoy the free time ✦'));
-      } else {
-        tasks.forEach(function (t) { paper.appendChild(taskRow(t)); });
-        paper.appendChild(h('hr', { class: 'dash' }));
-        paper.appendChild(h('div', { class: 'progress-h' }, h('span', {}, 'PROGRESS'), h('span', {}, done + ' / ' + total)));
-        var bars = h('div', { class: 'bars' });
-        for (var i = 0; i < total; i++) bars.appendChild(h('i', { class: i < done ? 'on' : '' }));
-        paper.appendChild(bars);
-        if (msg) paper.appendChild(h('div', { class: 'msg' }, msg));
-        paper.appendChild(h('hr', { class: 'dash' }));
-        var nums = h('div', { class: 'nums' });
-        [1, 2, 3, 4, 5].forEach(function (n) {
-          nums.appendChild(h('button', { class: state.rating === n ? 'on' : '', onclick: function () { setRating(n); } }, String(n)));
-        });
-        paper.appendChild(h('div', { class: 'rate' },
-          h('h3', {}, 'HOW DID TODAY FEEL?'),
-          nums,
-          h('div', { class: 'ends' }, h('span', {}, 'drained'), h('span', {}, 'good'))));
-        paper.appendChild(h('div', { class: 'hint' }, 'forgot to start or finish on time?\nhold the flag 2 seconds'));
-      }
-      kids.push(paper);
+      ensurePaper();
+      receipt.replaceChildren.apply(receipt, receiptContent());
     }
 
-    var modal = sheet();
-    if (modal) kids.push(modal);
-    root.replaceChildren.apply(root, kids);
+    // bottom bar: error, info buttons, print
+    var bar = [];
+    if (state.error) bar.push(h('div', { class: 'err' }, state.error));
+    if (state.printed && state.sections.length) {
+      bar.push(h('div', { class: 'secs' }, state.sections.map(function (s) {
+        return h('button', { class: 'sec', onclick: function () { state.sheet = s; render(); } }, checkProgress(s) + s.title);
+      })));
+    }
+    bar.push(state.loading
+      ? h('div', { class: 'fetching' }, 'fetching tasks...')
+      : h('button', { class: 'printbtn', onclick: function () { refresh(true); } }, state.printed ? '[ REPRINT ]' : '[ PRINT ]'));
+    var barEl = $('bar');
+    barEl.replaceChildren.apply(barEl, bar);
+
+    // dialog
+    var old = document.querySelector('.modal');
+    if (old) old.remove();
+    var d = dialog();
+    if (d) document.body.appendChild(d);
   }
 
-  // ---- keep it in sync all the time ----
+  // ---- go ----
+  setZoom();
+  window.addEventListener('resize', setZoom);
+  startGrid();
+  addDecorations();
+  startPrinter();
+  $('lock').addEventListener('click', function () { location.reload(); });
   render();
   refresh(true);
+
+  // keep it in sync all the time: every 20 seconds, and whenever you come back to the tab
   setInterval(function () {
-    if (document.visibilityState === 'visible') refresh(true);
+    if (document.visibilityState === 'visible') refresh(false);
   }, 20000);
-  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') refresh(true); });
-  window.addEventListener('focus', function () { refresh(true); });
-  window.addEventListener('online', function () { refresh(true); });
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') refresh(false); });
+  window.addEventListener('focus', function () { refresh(false); });
+  window.addEventListener('online', function () { refresh(false); });
 })();
