@@ -60,16 +60,51 @@ export const isFlagged = (t: Task): boolean => t.flaggedAt !== null && t.flagged
 
 const BULK_WINDOW_MS = 10 * 60_000;
 
+const TOGETHER_WINDOW_MS = 3 * 60_000;
+
+/** "Chem POGIL" for "Chem POGIL: part 1": the part before the first colon, lower-cased; null without a colon. */
+const seriesOf = (t: Task): string | null => {
+  const i = t.title.indexOf(':');
+  return i > 0 ? t.title.slice(0, i).trim().toLowerCase() : null;
+};
+
 /**
- * The ids of tasks that were ticked in a batch: any run of three or more ticks within 10 minutes. Those times show
- * when he ticked, not when he worked. Backfilled ticks are not counted (they are flagged separately).
+ * Blocks of one piece of work that were finished in a single sitting: a block with no Start press, ticked within three
+ * minutes of another block he did start, with the same subject and the same title prefix before the colon ("Chem POGIL:
+ * part 1" and "Chem POGIL: finish"). The unstarted block says nothing about its own time: the work was done together
+ * with the other one. Returns each such block's id mapped to the block it was finished with.
+ */
+export function finishedTogether(tasks: Task[], timeZone: string): Map<string, Task> {
+  const done = tasks.filter((t) => t.done && t.completedAt && !isFlagged(t) && !isBackfilled(t, timeZone));
+  const out = new Map<string, Task>();
+  for (const follower of done) {
+    const series = seriesOf(follower);
+    if (!series || follower.startedAt) continue;
+    const at = new Date(follower.completedAt!).getTime();
+    let best: { task: Task; gap: number } | null = null;
+    for (const leader of done) {
+      if (leader.id === follower.id || !leader.startedAt || leader.tag !== follower.tag || seriesOf(leader) !== series) continue;
+      const gap = Math.abs(new Date(leader.completedAt!).getTime() - at);
+      if (gap <= TOGETHER_WINDOW_MS && (!best || gap < best.gap)) best = { task: leader, gap };
+    }
+    if (best) out.set(follower.id, best.task);
+  }
+  return out;
+}
+
+/**
+ * The ids of tasks whose tick time says nothing about when the work happened: any run of three or more ticks within
+ * 10 minutes (he ticked a batch), plus blocks finished together with another block of the same work (`finishedTogether`).
+ * Backfilled ticks are not counted (they are flagged separately).
  */
 export function bulkTickedIds(tasks: Task[], timeZone: string): Set<string> {
+  // Blocks finished together with another count as one tick (they are one piece of work), so they never make a batch.
+  const together = finishedTogether(tasks, timeZone);
   const ticks = tasks
-    .filter((t) => t.done && t.completedAt && !isFlagged(t) && !isBackfilled(t, timeZone))
+    .filter((t) => t.done && t.completedAt && !isFlagged(t) && !isBackfilled(t, timeZone) && !together.has(t.id))
     .map((t) => ({ id: t.id, ms: new Date(t.completedAt!).getTime() }))
     .sort((a, b) => a.ms - b.ms);
-  const bulk = new Set<string>();
+  const bulk = new Set<string>(together.keys());
   for (let i = 0; i + 2 < ticks.length; i++) {
     if (ticks[i + 2].ms - ticks[i].ms <= BULK_WINDOW_MS) {
       bulk.add(ticks[i].id);
@@ -147,6 +182,12 @@ export interface DayTiming {
   ticked_in_bulk: boolean;
   /** Titles ticked in a batch. Left out of every figure above. */
   bulk_ticked: string[];
+  /**
+   * Work split into several blocks that he finished in one sitting (the later blocks have no Start press and were ticked
+   * within minutes of the first). `actual_min` is how long the one block he started really took, against `planned_min` for all of them.
+   * The unstarted blocks are left out of every figure above.
+   */
+  finished_together?: { blocks: string[]; planned_min: number | null; actual_min: number | null }[];
   /** Titles ticked after the day ended. Left out of every figure above. */
   backfilled: string[];
   /** Titles he flagged (forgot to start or finish them on time). Left out of every figure. */
@@ -168,8 +209,19 @@ export function dayTiming(tasks: Task[], timeZone: string): DayTiming | null {
   const flagged = done.filter((t) => isFlagged(t));
   const backfilled = done.filter((t) => !isFlagged(t) && isBackfilled(t, timeZone));
   const real = done.filter((t) => !isFlagged(t) && !isBackfilled(t, timeZone));
+  const together = finishedTogether(real, timeZone);
   const bulkIds = bulkTickedIds(real, timeZone);
-  const bulk = real.filter((t) => bulkIds.has(t.id));
+  const bulk = real.filter((t) => bulkIds.has(t.id) && !together.has(t.id));
+  const groups = new Map<string, Task[]>();
+  for (const [followerId, leader] of together) {
+    const follower = real.find((t) => t.id === followerId)!;
+    groups.set(leader.id, [...(groups.get(leader.id) ?? [leader]), follower]);
+  }
+  const finished_together = [...groups.values()].map((blocks) => ({
+    blocks: blocks.map((t) => t.title),
+    planned_min: blocks.every((t) => t.minutes) ? blocks.reduce((n, t) => n + t.minutes!, 0) : null,
+    actual_min: actualMinutes(blocks[0], timeZone),
+  }));
   const trusted = real.filter((t) => !bulkIds.has(t.id));
 
   const stamps = trusted.map((t) => new Date(t.completedAt!).getTime());
@@ -203,6 +255,7 @@ export function dayTiming(tasks: Task[], timeZone: string): DayTiming | null {
     out_of_order,
     ticked_in_bulk: bulk.length > 0,
     bulk_ticked: bulk.map((t) => t.title),
+    ...(finished_together.length ? { finished_together } : {}),
     backfilled: backfilled.map((t) => t.title),
     flagged: flagged.map((t) => t.title),
     started_blocks: startedTasks.length
@@ -211,6 +264,7 @@ export function dayTiming(tasks: Task[], timeZone: string): DayTiming | null {
   };
   const left = [
     bulk.length ? `${bulk.length} ticked in a batch (their times show when he ticked, not when he worked)` : '',
+    together.size ? `${together.size} finished in one sitting with an earlier block of the same work (see finished_together)` : '',
     backfilled.length ? `${backfilled.length} ticked after the day ended` : '',
     flagged.length ? `${flagged.length} flagged by him (his times for them are unreliable)` : '',
   ].filter(Boolean);

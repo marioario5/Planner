@@ -7,7 +7,7 @@ import { MAX_DEFER_DAYS, MAX_OPEN_COMMITMENTS, computeFramework, unaddressed } f
 import { MAX_ACTIVE_NOTES, resolvedToPrune, viewUserNotes } from './user-notes';
 import { DEFAULT_WINDOW_DAYS, MAX_WINDOW_DAYS, computeHabits, evaluateExperiments } from './habits';
 import { DEFAULT_PREFIXES, isSyncable, reconcile, type SyncConfig } from './sync';
-import { actualMinutes, bulkTickedIds, completedAtLocal, dayTiming, isBackfilled, isFlagged, lateMinutes, startDelayMinutes, startedMinutes } from './timing';
+import { actualMinutes, bulkTickedIds, completedAtLocal, dayTiming, finishedTogether, isBackfilled, isFlagged, lateMinutes, startDelayMinutes, startedMinutes } from './timing';
 import {
   COMMITMENT_STATUSES,
   PLANS,
@@ -190,6 +190,7 @@ const TOOLS = [
       'average and worst lateness, and which tasks were done out of order. Ticks that say nothing about when the work happened are ' +
       'flagged and left out of those figures (the rest of the day still counts): `bulk_ticked` lists tasks ticked in a batch ' +
       '(3+ within 10 minutes; their times show when he ticked, not when he worked). ' +
+      'When work is split into blocks ("Chem POGIL: part 1", "Chem POGIL: finish") and a later block with no Start press was ticked within minutes of an earlier one he started, he finished it all in one sitting: that block has `finished_with`, and `timing.finished_together` gives the planned vs real time for the whole piece. ' +
       'Tasks ticked after their planner day ended are `backfilled` (carried over and finished on a later day, or recorded late): they are listed in `timing.backfilled` and left out of every figure. ' +
       'If a day had both Plan A and Plan B, the day shows the one he followed (the plan with more tasks checked off, A on a tie) ' +
       'and `other_plan` gives the other one\'s totals. ' +
@@ -476,7 +477,7 @@ export interface McpContext {
 
 type Json = Record<string, unknown>;
 
-const view = (t: Task, timeZone: string, bulk?: Set<string>) => ({
+const view = (t: Task, timeZone: string, bulk?: Set<string>, together?: Map<string, Task>) => ({
   id: t.id,
   plan: t.plan,
   title: t.title,
@@ -496,7 +497,9 @@ const view = (t: Task, timeZone: string, bulk?: Set<string>) => ({
   // Ticked after its planner day ended, so the time isn't when the work happened (no lateness is reported).
   backfilled: isBackfilled(t, timeZone),
   // Ticked in a batch (3+ within 10 minutes), so the time is when he ticked, not when he worked (no lateness is reported).
-  bulk_ticked: bulk?.has(t.id) ?? false,
+  bulk_ticked: (bulk?.has(t.id) ?? false) && !together?.has(t.id),
+  // Title of the block he finished this one together with (no Start press, ticked within minutes of it), else null. Its times are left out.
+  finished_with: together?.get(t.id)?.title ?? null,
   // Local HH:MM he pressed Start (null if he didn't, or flagged it).
   started: startedMinutes(t, timeZone) === null ? null : localTime(t.startedAt!, timeZone),
   // How long the block really took (Start to tick) and how long after its planned start he began. Null unless trustworthy.
@@ -509,13 +512,14 @@ const view = (t: Task, timeZone: string, bulk?: Set<string>) => ({
 function summarize(date: string, plan: Plan, tasks: Task[], timeZone: string): Json {
   const timing = dayTiming(tasks, timeZone);
   const bulk = bulkTickedIds(tasks, timeZone);
+  const together = finishedTogether(tasks, timeZone);
   return {
     date,
     plan,
     done: tasks.filter((t) => t.done).length,
     total: tasks.length,
     ...(timing ? { timing } : {}),
-    tasks: tasks.map((t) => view(t, timeZone, bulk)),
+    tasks: tasks.map((t) => view(t, timeZone, bulk, together)),
   };
 }
 
@@ -887,6 +891,7 @@ async function history(args: Json, ctx: McpContext): Promise<Json> {
     total += followed.total;
     const timing = dayTiming(tasks, timeZone);
     const bulk = bulkTickedIds(tasks, timeZone);
+    const together = finishedTogether(tasks, timeZone);
     return {
       date,
       plan: followed.plan,
@@ -905,7 +910,8 @@ async function history(args: Json, ctx: McpContext): Promise<Json> {
         completed_at: completedAtLocal(t, timeZone),
         late_min: lateMinutes(t, timeZone, bulk),
         backfilled: isBackfilled(t, timeZone),
-        bulk_ticked: bulk.has(t.id),
+        bulk_ticked: bulk.has(t.id) && !together.has(t.id),
+        finished_with: together.get(t.id)?.title ?? null,
         started: startedMinutes(t, timeZone) === null ? null : localTime(t.startedAt!, timeZone),
         actual_min: actualMinutes(t, timeZone, bulk),
         start_delay_min: startDelayMinutes(t, timeZone),
