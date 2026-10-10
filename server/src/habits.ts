@@ -17,7 +17,7 @@ import {
   completedMinutes,
   isBackfilled,
   isFlagged,
-  lateMinutes,
+  slotLateness,
   startDelayMinutes,
 } from './timing';
 
@@ -222,6 +222,8 @@ interface FinishedDay {
   date: string;
   tasks: Task[];
   bulkIds: Set<string>;
+  /** Lateness by slot (see `slotLateness`): doing blocks in a different order is not lateness. */
+  slotLate: Map<string, number>;
 }
 
 /** Finished days from..through, each reduced to the plan he followed. */
@@ -235,7 +237,10 @@ export function finishedDays(all: Task[], timeZone: string, from: string, throug
     .sort(([a], [b]) => (a < b ? -1 : 1))
     .map(([date, dayTasks]) => ({ date, tasks: followedTasks(dayTasks) }))
     .filter((d) => d.tasks.length > 0)
-    .map((d) => ({ ...d, bulkIds: bulkTickedIds(d.tasks, timeZone) }));
+    .map((d) => {
+      const bulkIds = bulkTickedIds(d.tasks, timeZone);
+      return { ...d, bulkIds, slotLate: slotLateness(d.tasks, timeZone, bulkIds) };
+    });
 }
 
 /** Work blocks: everything except dinner, errands and the nightly wrap-up. */
@@ -259,8 +264,8 @@ export function computeHabits(
   const lateAll: number[] = [];
   for (const day of days) {
     for (const t of day.tasks) {
-      const late = lateMinutes(t, timeZone, day.bulkIds);
-      if (late === null) continue;
+      const late = day.slotLate.get(t.id);
+      if (late === undefined) continue;
       lateByTag.set(t.tag, [...(lateByTag.get(t.tag) ?? []), late]);
       lateAll.push(late);
     }
@@ -531,7 +536,7 @@ function sideOf(days: FinishedDay[], tag: Tag | null, timeZone: string, ratings:
     .map((d) => ({ d, tasks: d.tasks.filter((t) => (tag ? t.tag === tag : isWork(t))) }))
     .filter((r) => r.tasks.length > 0);
   const tasks = rows.flatMap((r) => r.tasks);
-  const late = rows.flatMap((r) => r.tasks.map((t) => lateMinutes(t, timeZone, r.d.bulkIds)).filter((n): n is number => n !== null));
+  const late = rows.flatMap((r) => r.tasks.map((t) => r.d.slotLate.get(t.id)).filter((n): n is number => n !== undefined));
   const rates = rows.map((r) => ratings.get(r.d.date)).filter((n): n is number => n !== undefined);
   const doneOnDay = tasks.filter((t) => t.done && !isBackfilled(t, timeZone)).length;
   return {

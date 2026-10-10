@@ -444,19 +444,19 @@ describe('check-off timing', () => {
   it('reports lateness per task and a day summary, flagging out-of-order work', async () => {
     const { data } = await threeBlocks();
     const id = (t: string) => data.tasks.find((x: any) => x.title === t).id;
-    await tick(id('B'), at(16, 50)); // 20 min after B's planned end
-    await tick(id('A'), at(17, 10)); // 75 min after A's planned end, and after B
+    await tick(id('B'), at(16, 50)); // 20 min after B's own planned end
+    await tick(id('A'), at(17, 10)); // 75 min after A's own planned end, and after B
 
     const day = await hist();
     const byTitle = Object.fromEntries(day.tasks.map((t: any) => [t.title, t]));
-    expect(byTitle.B).toMatchObject({ completed: '16:50', completed_at: '2026-10-01 16:50', late_min: 20 });
-    expect(byTitle.A).toMatchObject({ completed: '17:10', completed_at: '2026-10-01 17:10', late_min: 75 });
+    expect(byTitle.B).toMatchObject({ completed: '16:50', completed_at: '2026-10-01 16:50', late_min: 55, late_own_min: 20 }); // vs A's end 15:55: A and B were swapped
+    expect(byTitle.A).toMatchObject({ completed: '17:10', completed_at: '2026-10-01 17:10', late_min: 40, late_own_min: 75 }); // vs B's end 16:30
     expect(byTitle.C).toMatchObject({ completed: null, completed_at: null, late_min: null });
     expect(day.timing).toEqual({
       first_done: '16:50',
       last_done: '17:10',
-      avg_late_min: 48, // (20 + 75) / 2, rounded
-      max_late_min: 75,
+      avg_late_min: 48, // (55 + 40) / 2, rounded: each compared with the other's planned end
+      max_late_min: 55,
       out_of_order: [
         { title: 'A', planned_position: 1, done_position: 2 },
         { title: 'B', planned_position: 2, done_position: 1 },
@@ -466,12 +466,13 @@ describe('check-off timing', () => {
       backfilled: [],
       flagged: [],
       started_blocks: null,
+      note: "Two neighbouring blocks he did in the other order are compared with each other's planned ends, so swapping them is not counted as lateness.",
     });
 
     // list_tasks carries the same facts for the plan
     const list = (await tool('list_tasks', {})).data;
     expect(list.timing).toEqual(day.timing);
-    expect(list.tasks.find((t: any) => t.title === 'A')).toMatchObject({ completed_at: '2026-10-01 17:10', late_min: 75 });
+    expect(list.tasks.find((t: any) => t.title === 'A')).toMatchObject({ completed_at: '2026-10-01 17:10', late_min: 40 });
   });
 
   it('shows early check-offs as negative and in-order work as clean', async () => {

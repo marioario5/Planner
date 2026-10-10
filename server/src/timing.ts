@@ -138,6 +138,42 @@ export function lateMinutes(t: Task, timeZone: string, bulk?: Set<string>): numb
   return completed - plannedEnd;
 }
 
+const SWAP_WINDOW_MIN = 120;
+
+/**
+ * Lateness with order swaps taken out, so doing two neighbouring blocks the other way round is not counted as lateness.
+ * When a block was planned right before another but he finished it after that one, and both ticks are within two hours
+ * of each other, each is compared with the other's planned end instead of its own: planned PIQ 1:35 / Calc 12:20 and
+ * done Calc-after-PIQ stays on time for both, while being genuinely behind still shows as behind. Everything else keeps
+ * its own planned end, so a block that was simply put off until late at night is still late and the blocks done on time
+ * around it are not blamed. Only blocks `lateMinutes` can measure are used. Returns id -> minutes after the planned end
+ * (negative = early).
+ */
+export function slotLateness(tasks: Task[], timeZone: string, bulk?: Set<string>): Map<string, number> {
+  const rows = tasks
+    .filter((t) => lateMinutes(t, timeZone, bulk) !== null)
+    .map((t) => {
+      const [h, m] = t.start!.split(':').map(Number);
+      const p = localParts(t.completedAt!, timeZone);
+      const start = h * 60 + m;
+      return { id: t.id, start, end: start + t.minutes!, done: (dayNumber(p.date) - dayNumber(t.date)) * 1440 + p.minutes };
+    })
+    .sort((x, y) => x.start - y.start || x.end - y.end);
+  const out = new Map<string, number>();
+  for (let i = 0; i < rows.length; i++) {
+    const a = rows[i];
+    const b = rows[i + 1];
+    if (b && b.done < a.done && a.done - b.done <= SWAP_WINDOW_MIN) {
+      out.set(a.id, a.done - b.end);
+      out.set(b.id, b.done - a.end);
+      i++;
+    } else {
+      out.set(a.id, a.done - a.end);
+    }
+  }
+  return out;
+}
+
 /** Minutes after its planner day's local midnight that he pressed Start; null if he didn't, flagged it, or it was a different day. */
 export function startedMinutes(t: Task, timeZone: string): number | null {
   if (!t.startedAt || isFlagged(t)) return null;
@@ -237,7 +273,9 @@ export function dayTiming(tasks: Task[], timeZone: string): DayTiming | null {
     }))
     .sort((a, b) => a.planned_position - b.planned_position);
 
-  const late = trusted.map((t) => lateMinutes(t, timeZone)).filter((n): n is number => n !== null);
+  const slot = slotLateness(trusted, timeZone);
+  const late = [...slot.values()];
+  const reordered = trusted.some((t) => slot.has(t.id) && slot.get(t.id) !== lateMinutes(t, timeZone));
   const sorted = byDone.map((e) => e.ms);
   const clock = (ms: number) => hhmm(localParts(new Date(ms).toISOString(), timeZone).minutes);
 
@@ -268,6 +306,10 @@ export function dayTiming(tasks: Task[], timeZone: string): DayTiming | null {
     backfilled.length ? `${backfilled.length} ticked after the day ended` : '',
     flagged.length ? `${flagged.length} flagged by him (his times for them are unreliable)` : '',
   ].filter(Boolean);
-  if (left.length) timing.note = `Left out of the figures above: ${left.join('; ')}.`;
+  const notes = [
+    left.length ? `Left out of the figures above: ${left.join('; ')}.` : '',
+    reordered ? "Two neighbouring blocks he did in the other order are compared with each other's planned ends, so swapping them is not counted as lateness." : '',
+  ].filter(Boolean);
+  if (notes.length) timing.note = notes.join(' ');
   return timing;
 }

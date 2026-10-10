@@ -7,7 +7,7 @@ import { MAX_DEFER_DAYS, MAX_OPEN_COMMITMENTS, computeFramework, unaddressed } f
 import { MAX_ACTIVE_NOTES, resolvedToPrune, viewUserNotes } from './user-notes';
 import { DEFAULT_WINDOW_DAYS, MAX_WINDOW_DAYS, computeHabits, evaluateExperiments } from './habits';
 import { DEFAULT_PREFIXES, isSyncable, reconcile, type SyncConfig } from './sync';
-import { actualMinutes, bulkTickedIds, completedAtLocal, dayTiming, finishedTogether, isBackfilled, isFlagged, lateMinutes, startDelayMinutes, startedMinutes } from './timing';
+import { actualMinutes, bulkTickedIds, completedAtLocal, dayTiming, finishedTogether, isBackfilled, isFlagged, lateMinutes, slotLateness, startDelayMinutes, startedMinutes } from './timing';
 import {
   COMMITMENT_STATUSES,
   PLANS,
@@ -186,7 +186,7 @@ const TOOLS = [
     description:
       'What was planned and what he actually checked off over the last several days, oldest first. ' +
       'Each day lists its tasks with done true/false, when each was checked off (`completed_at`, local) and `late_min` ' +
-      '(minutes after its planned end he ticked it; negative = early), plus a `timing` summary: first and last check-off, ' +
+      '(minutes after its planned slot ended that he ticked it; negative = early; the k-th block he finished is compared with the k-th planned end, so doing blocks in a different order is not lateness, and `late_own_min` shows the old per-block figure when it differs), plus a `timing` summary: first and last check-off, ' +
       'average and worst lateness, and which tasks were done out of order. Ticks that say nothing about when the work happened are ' +
       'flagged and left out of those figures (the rest of the day still counts): `bulk_ticked` lists tasks ticked in a batch ' +
       '(3+ within 10 minutes; their times show when he ticked, not when he worked). ' +
@@ -477,7 +477,7 @@ export interface McpContext {
 
 type Json = Record<string, unknown>;
 
-const view = (t: Task, timeZone: string, bulk?: Set<string>, together?: Map<string, Task>) => ({
+const view = (t: Task, timeZone: string, bulk?: Set<string>, together?: Map<string, Task>, slot?: Map<string, number>) => ({
   id: t.id,
   plan: t.plan,
   title: t.title,
@@ -493,7 +493,9 @@ const view = (t: Task, timeZone: string, bulk?: Set<string>, together?: Map<stri
   // Same moment with its date ("2026-10-02 00:30"), so a tick after midnight isn't ambiguous.
   completed_at: completedAtLocal(t, timeZone),
   // Minutes after its planned end (start + minutes) that he ticked it; negative = early. Null for backfilled or batch-ticked tasks.
-  late_min: lateMinutes(t, timeZone, bulk),
+  late_min: slot ? slot.get(t.id) ?? null : lateMinutes(t, timeZone, bulk),
+  // Only when it differs: lateness against the block's own planned end, before doing blocks in another order was taken into account.
+  ...(slot && slot.has(t.id) && slot.get(t.id) !== lateMinutes(t, timeZone, bulk) ? { late_own_min: lateMinutes(t, timeZone, bulk) } : {}),
   // Ticked after its planner day ended, so the time isn't when the work happened (no lateness is reported).
   backfilled: isBackfilled(t, timeZone),
   // Ticked in a batch (3+ within 10 minutes), so the time is when he ticked, not when he worked (no lateness is reported).
@@ -513,13 +515,14 @@ function summarize(date: string, plan: Plan, tasks: Task[], timeZone: string): J
   const timing = dayTiming(tasks, timeZone);
   const bulk = bulkTickedIds(tasks, timeZone);
   const together = finishedTogether(tasks, timeZone);
+  const slot = slotLateness(tasks, timeZone, bulk);
   return {
     date,
     plan,
     done: tasks.filter((t) => t.done).length,
     total: tasks.length,
     ...(timing ? { timing } : {}),
-    tasks: tasks.map((t) => view(t, timeZone, bulk, together)),
+    tasks: tasks.map((t) => view(t, timeZone, bulk, together, slot)),
   };
 }
 
@@ -892,6 +895,7 @@ async function history(args: Json, ctx: McpContext): Promise<Json> {
     const timing = dayTiming(tasks, timeZone);
     const bulk = bulkTickedIds(tasks, timeZone);
     const together = finishedTogether(tasks, timeZone);
+    const slot = slotLateness(tasks, timeZone, bulk);
     return {
       date,
       plan: followed.plan,
@@ -908,7 +912,8 @@ async function history(args: Json, ctx: McpContext): Promise<Json> {
         done: t.done,
         completed: t.done && t.completedAt ? localTime(t.completedAt, timeZone) : null,
         completed_at: completedAtLocal(t, timeZone),
-        late_min: lateMinutes(t, timeZone, bulk),
+        late_min: slot.get(t.id) ?? null,
+        ...(slot.has(t.id) && slot.get(t.id) !== lateMinutes(t, timeZone, bulk) ? { late_own_min: lateMinutes(t, timeZone, bulk) } : {}),
         backfilled: isBackfilled(t, timeZone),
         bulk_ticked: bulk.has(t.id) && !together.has(t.id),
         finished_with: together.get(t.id)?.title ?? null,
