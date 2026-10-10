@@ -57,6 +57,9 @@ export interface TaskPatch {
   started?: boolean;
   /** true = flag the task's times as unreliable; false = unflag. */
   flagged?: boolean;
+  /** Only with done: true. Puts back the Start press and finish time from before an accidental untick. */
+  restoreStarted?: string | null;
+  restoreCompleted?: string | null;
 }
 
 /** A titled block of text Claude writes for the day (warnings, pre-start, next PCB work...); each is a button in the app. */
@@ -357,6 +360,18 @@ export function parsePatch(value: unknown): TaskPatch {
   if (done !== undefined) {
     if (typeof done !== 'boolean') throw new ValidationError('done must be true or false');
     patch.done = done;
+  }
+  const { restoreStarted, restoreCompleted } = value as Record<string, unknown>;
+  const iso = (v: unknown, name: string): string => {
+    if (typeof v !== 'string' || Number.isNaN(Date.parse(v))) {
+      throw new ValidationError(`${name} must be an ISO time`);
+    }
+    return new Date(v).toISOString();
+  };
+  if (restoreStarted !== undefined || restoreCompleted !== undefined) {
+    if (patch.done !== true) throw new ValidationError('restoreStarted/restoreCompleted only go with done: true');
+    if (restoreStarted !== undefined && restoreStarted !== null) patch.restoreStarted = iso(restoreStarted, 'restoreStarted');
+    if (restoreCompleted !== undefined && restoreCompleted !== null) patch.restoreCompleted = iso(restoreCompleted, 'restoreCompleted');
   }
   if (Object.keys(patch).length === 0) {
     throw new ValidationError('nothing to update: pass title, tag, start, minutes, notes, siteKey, done, started, or flagged');

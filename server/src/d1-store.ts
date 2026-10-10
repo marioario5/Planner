@@ -198,7 +198,11 @@ export class D1TaskStore implements TaskStore {
     }
     if (patch.done !== undefined) {
       sets.push('done = ?', 'completed_at = ?', 'done_at = ?');
-      values.push(patch.done ? 1 : 0, patch.done ? new Date().toISOString() : null, Date.now());
+      values.push(patch.done ? 1 : 0, patch.done ? patch.restoreCompleted ?? new Date().toISOString() : null, Date.now());
+      if (patch.done && patch.restoreStarted) {
+        sets.push('started_at = ?');
+        values.push(patch.restoreStarted);
+      }
       // Unticking starts the task over: forget the Start press (unless the same patch sets one).
       if (!patch.done && patch.started === undefined) sets.push('started_at = NULL');
     }

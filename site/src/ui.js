@@ -245,11 +245,25 @@
   function pull(id) { addFocus(id); popId = id; render(); }
   function putBack(id) { removeFocus(id); render(); }
   function startTask(id) { act(id, function (t) { return pressStart(t, new Date().toISOString()); }, function () { return api.setStarted(id, true); }); }
-  function finishTask(id) { removeFocus(id); act(id, tick, function () { return api.setDone(id, true); }); }
+  var undos = {};
+  function finishTask(id) {
+    removeFocus(id);
+    var undo = freshUndo(undos[id], Date.now());
+    delete undos[id];
+    if (undo) {
+      // ticked again right after an accidental untick: keep the original Start press and finish time
+      act(id, function (t) { return Object.assign({}, tick(t), { startedAt: undo.startedAt, completedAt: undo.completedAt }); },
+        function () { return api.setDone(id, true, undo); });
+      return;
+    }
+    act(id, tick, function () { return api.setDone(id, true); });
+  }
   function stopTask(id) { addFocus(id); act(id, pressStop, function () { return api.setStarted(id, false); }); }
   function redoTask(id, focus) {
     removeFocus(id);
     if (focus) addFocus(id);
+    var was = byId(id);
+    if (was && was.done) undos[id] = undoSnapshot(was, Date.now());
     act(id, untick, function () { return api.setDone(id, false); });
   }
 

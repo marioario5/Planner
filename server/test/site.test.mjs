@@ -32,6 +32,9 @@ import {
   toggleDone,
   toggleFlag,
   untick,
+  undoSnapshot,
+  freshUndo,
+  UNDO_UNTICK_MS,
 } from '../../site/src/logic.mjs';
 
 const task = (over = {}) =>
@@ -79,6 +82,15 @@ describe('site: task rules (same as the phone app)', () => {
     expect(t.startedAt).toBeNull();
     expect([canStart(t), canStop(t)]).toEqual([true, false]);
     expect(untick(task({ done: true })).startedAt).toBeNull();
+  });
+
+  it('an untick can be undone for 10 seconds, then the snapshot expires', () => {
+    const done = { ...task({ done: true }), startedAt: T0, completedAt: '2026-10-09T01:20:00.000Z' };
+    const snap = undoSnapshot(done, 1000);
+    expect(snap).toMatchObject({ startedAt: T0, completedAt: '2026-10-09T01:20:00.000Z' });
+    expect(freshUndo(snap, 1000 + UNDO_UNTICK_MS)).toBe(snap);
+    expect(freshUndo(snap, 1000 + UNDO_UNTICK_MS + 1)).toBeNull();
+    expect(freshUndo(undefined, 5)).toBeNull();
   });
 
   it('the flag survives every transition, and a second round records a fresh start', () => {

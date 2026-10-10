@@ -47,6 +47,7 @@ export function normalizeTask(t) {
     notes: typeof t.notes === 'string' && t.notes !== '' ? t.notes : null,
     done: t.done === true,
     startedAt: typeof t.started === 'string' ? t.started : null,
+    completedAt: typeof t.completed === 'string' ? t.completed : null,
     flagged: t.flagged === true,
   };
 }
@@ -78,6 +79,19 @@ export function tick(task) {
 /** Unticking starts the task over. */
 export function untick(task) {
   return { ...task, done: false, startedAt: null };
+}
+
+/** How long after an untick a re-tick puts the old Start press and finish time back (an accidental untick). */
+export const UNDO_UNTICK_MS = 10000;
+
+/** What an untick of `task` can undo: its Start press and finish time, stamped with when the untick happened. */
+export function undoSnapshot(task, nowMs) {
+  return { startedAt: task.startedAt, completedAt: task.completedAt, at: nowMs };
+}
+
+/** The snapshot if it is still fresh enough to restore, else null. */
+export function freshUndo(snapshot, nowMs) {
+  return snapshot && nowMs - snapshot.at <= UNDO_UNTICK_MS ? snapshot : null;
 }
 
 export function toggleDone(task) {
@@ -271,7 +285,8 @@ export function createApi({ baseUrl, token, fetchImpl, timeoutMs = 15000 }) {
       };
     },
     /** Unticking also clears the Start press, so the task starts over (same as the phone app). */
-    setDone: (id, done) => patch(id, done ? { done: true } : { done: false, started: false }),
+    setDone: (id, done, restore) =>
+      patch(id, done ? { done: true, ...(restore ? { restoreStarted: restore.startedAt, restoreCompleted: restore.completedAt } : {}) } : { done: false, started: false }),
     setStarted: (id, started) => patch(id, { started }),
     setFlagged: (id, flagged) => patch(id, { flagged }),
     async setRating(rating) {

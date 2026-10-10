@@ -448,6 +448,11 @@ const TOOLS = [
             "When he actually finished, 24-hour HH:MM on the task's planner day (00:00 to 03:59 means after midnight, the next morning). " +
             'Only with done: true, and not in the future.',
         },
+        started_at: {
+          ...startProp,
+          description:
+            "Fixes when he actually pressed Start, 24-hour HH:MM on the task's planner day. Only with done: true; pair it with `completed` to keep the finish time.",
+        },
       },
       required: ['id'],
     },
@@ -984,10 +989,17 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
     }
     case 'update_task': {
       const id = parseId(args.id);
-      const { id: _id, completed, ...rest } = args;
+      const { id: _id, completed, started_at: startedAtArg, ...rest } = args;
       const finishedTime = completed === undefined || completed === null ? null : parseStart(completed);
       if (finishedTime && rest.done !== true) throw new ValidationError('completed only goes with done: true');
+      const startedTime = startedAtArg === undefined || startedAtArg === null ? null : parseStart(startedAtArg);
+      if (startedTime && rest.done !== true) throw new ValidationError('started_at only goes with done: true');
       const patch = parsePatch(rest);
+      if (startedTime) {
+        const existing = await store.get(id);
+        if (!existing) throw new ValidationError(`no task with id ${id}`);
+        patch.restoreStarted = new Date(plannerTimeToEpoch(existing.date, startedTime, timeZone)).toISOString();
+      }
       checkSiteKeys([patch.siteKey], ctx);
 
       // "I actually finished at 6:15pm": validate before writing anything, then record that time

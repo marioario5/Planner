@@ -84,7 +84,8 @@ export class MemoryTaskStore implements TaskStore {
     if (patch.done !== undefined) {
       task.done = patch.done;
       task.doneAt = this.clock();
-      task.completedAt = patch.done ? new Date(task.doneAt).toISOString() : null;
+      task.completedAt = patch.done ? patch.restoreCompleted ?? new Date(task.doneAt).toISOString() : null;
+      if (patch.done && patch.restoreStarted) task.startedAt = patch.restoreStarted;
       if (!patch.done && patch.started === undefined) task.startedAt = null; // unticking starts it over
     }
     return task;

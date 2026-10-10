@@ -431,6 +431,16 @@ describe('check-off timing', () => {
       { title: 'C', start: '17:00', minutes: 20 }, // ends 17:20
     ]);
 
+  it('update_task can fix the start and finish time together', async () => {
+    const { data } = await threeBlocks();
+    const id = data.tasks.find((x: any) => x.title === 'A').id;
+    await tick(id, at(17, 10));
+    const { data: fixed } = await tool('update_task', { id, done: true, completed: '16:20', started_at: '15:35' });
+    expect(fixed.updated).toMatchObject({ completed: '16:20', started: '15:35' });
+    const bad = await tool('update_task', { id, started_at: '15:35' });
+    expect(JSON.stringify(bad)).toContain('started_at only goes with done');
+  });
+
   it('reports lateness per task and a day summary, flagging out-of-order work', async () => {
     const { data } = await threeBlocks();
     const id = (t: string) => data.tasks.find((x: any) => x.title === t).id;
@@ -1303,6 +1313,7 @@ describe('rest api for the app', () => {
         notes: null,
         done: false,
         started: null,
+        completed: null,
         flagged: false,
         position: 0,
       },
@@ -1405,6 +1416,25 @@ describe('start button, flag and day rating (app API)', () => {
     // pressing Start again after that begins a fresh timer
     store.clock = () => at(18, 0);
     expect((await patch(id, { started: true })).data.started).toBe('2026-10-02T01:00:00.000Z');
+  });
+
+  it('a re-tick can restore the Start press and finish time from before an accidental untick', async () => {
+    const id = await makeTask();
+    store.clock = () => at(16, 35);
+    await patch(id, { started: true });
+    store.clock = () => at(17, 20);
+    const first = (await patch(id, { done: true })).data;
+    expect(first.completed).toBe(new Date(at(17, 20)).toISOString());
+    await patch(id, { done: false, started: false });
+    store.clock = () => at(17, 25);
+    const back = (await patch(id, { done: true, restoreStarted: first.started, restoreCompleted: first.completed })).data;
+    expect(back).toMatchObject({ done: true, started: first.started, completed: first.completed });
+  });
+
+  it('restore fields need done: true and an ISO time', async () => {
+    const id = await makeTask();
+    expect((await patch(id, { restoreStarted: '2026-10-02T01:00:00.000Z' })).status).toBe(400);
+    expect((await patch(id, { done: true, restoreCompleted: 'noon' })).status).toBe(400);
   });
 
   it('rejects a non-boolean started or flagged', async () => {
