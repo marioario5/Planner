@@ -106,6 +106,65 @@ void main() {
     });
   });
 
+  group('undoing an accidental untick', () {
+    final started = DateTime(2026, 10, 10, 12, 56);
+    final finished = DateTime(2026, 10, 10, 13, 48);
+    Task finishedTask() => newTask(done: true, startedAt: started)..completedAt = finished;
+    final noon = DateTime(2026, 10, 10, 14, 0);
+
+    test('re-ticking within 10 seconds brings back the Start press and finish time', () {
+      final t = finishedTask();
+      final unticks = <String, UntickUndo>{};
+      expect(t.toggleWithUndo(unticks, noon), isNull);
+      expect(t.done, isFalse);
+      expect(t.startedAt, isNull); // an untick starts the task over...
+      final undo = t.toggleWithUndo(unticks, noon.add(const Duration(seconds: 9)));
+      expect(undo, isNotNull); // ...unless it is undone straight away
+      expect([t.done, t.startedAt, t.completedAt], [true, started, finished]);
+      expect(unticks, isEmpty);
+    });
+
+    test('after 10 seconds a re-tick is an ordinary tick: no Start press, finish time is now', () {
+      final t = finishedTask();
+      final unticks = <String, UntickUndo>{};
+      t.toggleWithUndo(unticks, noon);
+      final later = noon.add(const Duration(seconds: 11));
+      expect(t.toggleWithUndo(unticks, later), isNull);
+      expect([t.done, t.startedAt, t.completedAt], [true, null, later]);
+    });
+
+    test('an undo is used once: untick, undo, untick, wait, tick is ordinary', () {
+      final t = finishedTask();
+      final unticks = <String, UntickUndo>{};
+      t.toggleWithUndo(unticks, noon);
+      t.toggleWithUndo(unticks, noon.add(const Duration(seconds: 2))); // undone
+      t.toggleWithUndo(unticks, noon.add(const Duration(minutes: 1))); // untick again
+      expect(t.toggleWithUndo(unticks, noon.add(const Duration(minutes: 2))), isNull);
+      expect(t.startedAt, isNull);
+    });
+
+    test('a task ticked from idle can be unticked and undone too', () {
+      final t = newTask();
+      final unticks = <String, UntickUndo>{};
+      t.toggleWithUndo(unticks, noon); // tick
+      expect(t.completedAt, noon);
+      t.toggleWithUndo(unticks, noon.add(const Duration(seconds: 3))); // untick
+      final undo = t.toggleWithUndo(unticks, noon.add(const Duration(seconds: 5)));
+      expect(undo, isNotNull);
+      expect([t.done, t.startedAt, t.completedAt], [true, null, noon]);
+    });
+
+    test('other tasks are not affected', () {
+      final a = finishedTask();
+      final b = Task(id: 'other', label: 'x', tag: TaskTag.sat);
+      final unticks = <String, UntickUndo>{};
+      a.toggleWithUndo(unticks, noon);
+      b.toggleWithUndo(unticks, noon.add(const Duration(seconds: 1)));
+      expect(b.startedAt, isNull);
+      expect(b.completedAt, noon.add(const Duration(seconds: 1)));
+    });
+  });
+
   group('task row (what is on screen)', () {
     setUpAll(() {
       // No network in tests: fall back to the default font instead of fetching Press Start 2P.

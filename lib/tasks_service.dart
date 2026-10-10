@@ -107,6 +107,7 @@ class TasksService {
                 notes: t['notes'] as String?,
                 // Both absent on a server that predates the Start button and flag.
                 startedAt: DateTime.tryParse((t['started'] as String?) ?? '')?.toLocal(),
+                completedAt: DateTime.tryParse((t['completed'] as String?) ?? '')?.toLocal(),
                 flagged: (t['flagged'] as bool?) ?? false,
               ))
           .toList();
@@ -153,8 +154,14 @@ class TasksService {
   }
 
   /// Unticking also clears the Start press, so the task starts over.
-  static Future<bool> setTaskCompleted(Task task, bool completed) =>
-      _patchTask(task, {'done': completed, if (!completed) 'started': false});
+  /// With [restore] (ticking again right after an accidental untick) the server puts the old Start press and
+  /// finish time back instead of stamping "now".
+  static Future<bool> setTaskCompleted(Task task, bool completed, {UntickUndo? restore}) => _patchTask(task, {
+        'done': completed,
+        if (!completed) 'started': false,
+        if (completed && restore?.startedAt != null) 'restoreStarted': restore!.startedAt!.toUtc().toIso8601String(),
+        if (completed && restore?.completedAt != null) 'restoreCompleted': restore!.completedAt!.toUtc().toIso8601String(),
+      });
 
   /// Records (or clears) the moment he pressed Start. The server keeps the first press.
   static Future<bool> setTaskStarted(Task task, bool started) =>

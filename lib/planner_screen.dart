@@ -149,6 +149,7 @@ class _PlannerScreenState extends State<PlannerScreen>
   String _plan = 'A';                // which plan is showing
   Set<String> _ticks = {};           // ticked checklist items, "Section|item"
   int? _rating;                      // how today felt, 1-5
+  final Map<String, UntickUndo> _unticks = {}; // what a recent untick threw away, so a quick re-tick can undo it
 
   List<Task> get _planTasks => _tasks.where((t) => t.plan == _plan).toList();
   bool get _hasPlanB => _tasks.any((t) => t.plan == 'B');
@@ -232,15 +233,20 @@ class _PlannerScreenState extends State<PlannerScreen>
     HapticFeedback.lightImpact();
     final wasDone = task.done;
     final startedBefore = task.startedAt;
-    setState(task.toggleDone); // unticking also forgets the Start press (see Task)
+    final completedBefore = task.completedAt;
 
-    final ok = await TasksService.setTaskCompleted(task, task.done);
+    // Ticking again within 10 seconds of an untick undoes it: the original Start press and finish time come back.
+    UntickUndo? restore;
+    setState(() => restore = task.toggleWithUndo(_unticks));
+
+    final ok = await TasksService.setTaskCompleted(task, task.done, restore: restore);
     if (!ok && mounted) {
       // Couldn't reach the server — revert the checkbox so the UI
       // doesn't claim it's synced when it isn't.
       setState(() {
         task.done = wasDone;
         task.startedAt = startedBefore;
+        task.completedAt = completedBefore;
         _error = "Couldn't sync that change";
       });
     }

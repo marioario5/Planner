@@ -20,6 +20,20 @@ String formatClock(String hhmm) {
   return '$h12:${parts[1]}${h >= 12 ? 'pm' : 'am'}';
 }
 
+/// How long after an untick a re-tick puts the old Start press and finish time back (an accidental untick).
+const Duration undoUntickWindow = Duration(seconds: 10);
+
+/// What an untick threw away, so an immediate re-tick can bring it back.
+class UntickUndo {
+  final DateTime? startedAt;
+  final DateTime? completedAt;
+  final DateTime unticked;
+  const UntickUndo({this.startedAt, this.completedAt, required this.unticked});
+
+  /// True while a re-tick at [now] still counts as undoing the untick.
+  bool isFresh(DateTime now) => now.difference(unticked) <= undoUntickWindow;
+}
+
 class Task {
   final String id;
   String label;
@@ -37,6 +51,9 @@ class Task {
   /// When he pressed Start on it (local time), or null.
   DateTime? startedAt;
 
+  /// When it was checked off (local time), or null. Only needed to undo an accidental untick.
+  DateTime? completedAt;
+
   /// He held the flag on it: his start or finish time for this task is wrong,
   /// so the planner must not learn from it.
   bool flagged;
@@ -51,6 +68,7 @@ class Task {
     this.minutes,
     this.notes,
     this.startedAt,
+    this.completedAt,
     this.flagged = false,
   });
 
@@ -64,6 +82,7 @@ class Task {
   // - Ticking the row is the same as FINISH, and works from idle (a tick with no Start press has no
   //   real duration, only the tick time).
   // - Unticking always starts the task over: the Start press goes with it, so START shows again.
+  //   Ticking it again within 10 seconds undoes that: the old Start press and finish time come back.
   // - STOP only exists while running. It forgets the Start press; it never ticks or unticks.
   // - The flag is separate: it survives every transition above.
 
@@ -85,18 +104,50 @@ class Task {
   }
 
   /// FINISH, or ticking the row. Keeps the Start press so the server can work out the real duration.
-  void tick() {
+  void tick([DateTime? now]) {
     done = true;
+    completedAt = now ?? DateTime.now();
   }
 
   /// Unticking starts the task over.
   void untick() {
     done = false;
     startedAt = null;
+    completedAt = null;
+  }
+
+  /// What an untick right now would throw away.
+  UntickUndo undoOfUntick([DateTime? now]) =>
+      UntickUndo(startedAt: startedAt, completedAt: completedAt, unticked: now ?? DateTime.now());
+
+  /// Re-ticking within [undoUntickWindow] of an untick: done again with the original Start press and finish time.
+  void restore(UntickUndo undo) {
+    done = true;
+    startedAt = undo.startedAt;
+    completedAt = undo.completedAt ?? DateTime.now();
   }
 
   /// A tap on the row's checkbox/label.
   void toggleDone() => done ? untick() : tick();
+
+  /// A tap on the checkbox/row/FINISH that remembers what an untick throws away in [unticks]. Ticking again within
+  /// [undoUntickWindow] of an untick puts the old Start press and finish time back; returns that snapshot so the
+  /// server can restore it too, or null for an ordinary tick or untick.
+  UntickUndo? toggleWithUndo(Map<String, UntickUndo> unticks, [DateTime? now]) {
+    final at = now ?? DateTime.now();
+    if (done) {
+      unticks[id] = undoOfUntick(at);
+      untick();
+      return null;
+    }
+    final undo = unticks.remove(id);
+    if (undo != null && undo.isFresh(at)) {
+      restore(undo);
+      return undo;
+    }
+    tick(at);
+    return null;
+  }
 
   /// "4:20pm" for when he pressed Start; null if he hasn't.
   String? get startedLabel {
