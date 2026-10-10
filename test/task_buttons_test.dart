@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:google_fonts/google_fonts.dart';
 
-Task newTask({bool done = false, DateTime? startedAt, bool flagged = false}) => Task(
+Task newTask({bool done = false, DateTime? startedAt, bool flagged = false, String? notes}) => Task(
       id: 't1',
       label: 'Calc 3 practice',
       tag: TaskTag.calculus3,
@@ -16,6 +16,7 @@ Task newTask({bool done = false, DateTime? startedAt, bool flagged = false}) => 
       done: done,
       startedAt: startedAt,
       flagged: flagged,
+      notes: notes,
     );
 
 final t0 = DateTime(2026, 10, 8, 16, 20);
@@ -249,6 +250,24 @@ void main() {
       await tester.pump();
       expect(task.flagged, isTrue);
       expect(start, findsOneWidget);
+    });
+
+    testWidgets('hit areas are big: a near miss on the buttons still hits them, and never ticks the row', (tester) async {
+      final task = await mount(tester, newTask(notes: 'how'));
+      // "+ how to start": 12 px below its text still opens the notes (it used to fall through and tick the task)
+      final how = tester.getCenter(find.text('+ how to start'));
+      await tester.tapAt(how + const Offset(0, 12));
+      await tester.pump();
+      expect(find.text('- hide how'), findsOneWidget);
+      expect(task.done, isFalse);
+      // START: 10 px above and below its box still starts it
+      final r = tester.getRect(start);
+      await tester.tapAt(Offset(r.center.dx, r.bottom + 10));
+      await tester.pump();
+      expect(task.phase, TaskPhase.running);
+      // the stop and flag buttons are at least 40 px
+      expect(tester.getSize(find.ancestor(of: stop, matching: find.byType(Container)).last).height, greaterThanOrEqualTo(40));
+      expect(tester.getSize(find.ancestor(of: find.byIcon(Icons.flag), matching: find.byType(SizedBox)).first).height, greaterThanOrEqualTo(40));
     });
   });
 }

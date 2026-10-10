@@ -1041,19 +1041,23 @@ class _TaskRowState extends State<TaskRow> with SingleTickerProviderStateMixin {
     final started = task.canFinish;
     final color = tagColor(task.tag);
     return Padding(
-      padding: const EdgeInsets.only(top: 5),
+      padding: EdgeInsets.zero,
       child: Row(children: [
         GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: started ? widget.onToggle : widget.onStart,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
-            decoration: BoxDecoration(
-              color: started ? color : cPaper,
-              border: Border.all(color: color, width: 2),
+          // The padding around the visible button is part of the tap area (about 44 px tall), so it is easy to hit.
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(0, 10, 10, 10),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+              decoration: BoxDecoration(
+                color: started ? color : cPaper,
+                border: Border.all(color: color, width: 2),
+              ),
+              child: Text(started ? 'FINISH' : 'START',
+                  style: _px(5, started ? Colors.white : color, height: 1.2, letterSpacing: 0.5)),
             ),
-            child: Text(started ? 'FINISH' : 'START',
-                style: _px(5, started ? Colors.white : color, height: 1.2, letterSpacing: 0.5)),
           ),
         ),
         if (started) ...[
@@ -1147,7 +1151,8 @@ class _TaskRowState extends State<TaskRow> with SingleTickerProviderStateMixin {
                       behavior: HitTestBehavior.opaque,
                       onTap: () => setState(() => _showNotes = !_showNotes),
                       child: Padding(
-                        padding: const EdgeInsets.only(top: 3, bottom: 2),
+                        // generous invisible padding: a near miss here used to fall through and untick the task
+                        padding: const EdgeInsets.fromLTRB(0, 10, 40, 10),
                         child: Text(_showNotes ? '- hide how' : '+ how to start',
                           style: GoogleFonts.pressStart2p(
                               fontSize: 5, color: cInkLight, height: 1.6),
@@ -1191,14 +1196,18 @@ class _TaskRowState extends State<TaskRow> with SingleTickerProviderStateMixin {
                   behavior: HitTestBehavior.opaque,
                   onTap: widget.onResetStart,
                   child: Container(
-                    width: 22,
-                    height: 22,
-                    margin: const EdgeInsets.only(top: 2),
-                    decoration: BoxDecoration(
-                      color: cPaper,
-                      border: Border.all(color: cInk, width: 2),
+                    width: 40,
+                    height: 40,
+                    alignment: Alignment.center,
+                    child: Container(
+                      width: 22,
+                      height: 22,
+                      decoration: BoxDecoration(
+                        color: cPaper,
+                        border: Border.all(color: cInk, width: 2),
+                      ),
+                      child: const Icon(Icons.stop, size: 12, color: cInk),
                     ),
-                    child: const Icon(Icons.stop, size: 12, color: cInk),
                   ),
                 ),
             ]),
@@ -1250,8 +1259,8 @@ class _HoldFlagState extends State<_HoldFlag> with SingleTickerProviderStateMixi
       onTapUp: (_) => _hold.reset(),
       onTapCancel: () => _hold.reset(),
       child: SizedBox(
-        width: 28,
-        height: 28,
+        width: 40,
+        height: 40,
         child: Stack(alignment: Alignment.center, children: [
           AnimatedBuilder(
             animation: _hold,
