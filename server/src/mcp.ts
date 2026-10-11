@@ -1067,10 +1067,12 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
         patch.pausedAtIso = new Date(pausedMs).toISOString();
       }
       if (pausedMinArg !== undefined && pausedMinArg !== null) {
-        if (typeof pausedMinArg !== 'number' || !Number.isInteger(pausedMinArg) || pausedMinArg < 0 || pausedMinArg > 1440) {
+        // some clients send a number as text ("91")
+        const minutes = typeof pausedMinArg === 'string' && /^\d{1,4}$/.test(pausedMinArg.trim()) ? Number(pausedMinArg) : pausedMinArg;
+        if (typeof minutes !== 'number' || !Number.isInteger(minutes) || minutes < 0 || minutes > 1440) {
           throw new ValidationError('paused_min must be a whole number of minutes (0 to 1440)');
         }
-        patch.pausedMsSet = pausedMinArg * 60_000;
+        patch.pausedMsSet = minutes * 60_000;
       }
       if (startedTime) {
         const existing = await store.get(id);

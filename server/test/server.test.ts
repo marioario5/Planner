@@ -455,6 +455,10 @@ describe('check-off timing', () => {
     const day = (await tool('list_tasks', {})).data.tasks.find((x: any) => x.id === id);
     expect(day).toMatchObject({ started: '15:35', completed: '16:35', paused_min: 20, actual_min: 40 });
     expect(JSON.stringify(await tool('update_task', { id, paused_min: -1 }))).toContain('paused_min must be');
+    // a client that sends the number as text still works
+    const asText = await tool('update_task', { id, paused_min: '25' });
+    expect(asText.data.updated).toMatchObject({ paused_min: 25 });
+    expect(JSON.stringify(await tool('update_task', { id, paused_min: 'a lot' }))).toContain('paused_min must be');
   });
 
   it('reports lateness per task and a day summary, flagging out-of-order work', async () => {
