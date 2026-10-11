@@ -29,6 +29,8 @@ Claude routine ──MCP──▶  Worker + D1  ◀──REST──  Flutter app
 | `delete_user_note` | Permanently delete one note, for example when he asks to be forgotten. |
 | `add_task` | Append one task to a plan (`plan?`, A by default). |
 | `update_task` | Change title / tag / time / notes, or set `done`. Pass `null` to clear `start`, `minutes` or `notes`. Hand fixes for a record: `completed` and `started_at` (HH:MM) correct a finished task's times, `paused_at` pauses a running task as of a time, `paused_min` sets the minutes already paused, and `done: false` with `started_at` reopens a task as running. The planner routine must not use it to tick or untick his work. |
+| `get_server_status` | Whether the server is healthy: which database migrations are missing (each with the exact `npm run db:...:remote` command, oldest first) and whether the progress-site sync is on. A missing migration otherwise fails quietly, so check this after a deploy. |
+| `get_site_progress` | His progress site's exact check-off state, read straight from its database: the Calc 3 (or `prefix`) task rows, the Calc 3 rest-day slots and the calendar items in a date window. The routine uses it instead of downloading the site's URL, which its environment blocks and a web reader can only summarize. Needs `FIREBASE_STATE_URL`. |
 | `get_task_log` | The most recent changes to tasks (newest first): when, which task, what sent it (website, phone app, progress-site sync, planner tool) and what it asked for. For tracing a task that changed unexpectedly. Needs migration 0011. |
 | `delete_task` | Remove a task. |
 
