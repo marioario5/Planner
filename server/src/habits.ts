@@ -20,6 +20,7 @@ import {
   slotLateness,
   startDelayMinutes,
 } from './timing';
+import { computeTransitions, type Transitions } from './transitions';
 
 export const DEFAULT_WINDOW_DAYS = 28;
 export const MAX_WINDOW_DAYS = 90;
@@ -154,6 +155,8 @@ export interface HabitStats {
   capacity: { weekday: Capacity | null; weekend: Capacity | null };
   /** How heavy the last 7 days were, with the plain-language reasons. Use it to keep a week from getting too heavy. */
   week_load: WeekLoad;
+  /** The rests between blocks and the order he does them in (null until there are Start presses to measure it). */
+  transitions: Transitions | null;
   /** How draining his days felt (1 drained and wrecked, 5 good with energy left): strain and energy, not grades or mood. */
   ratings: { scale: string; n: number; avg: number; recent: { date: string; rating: number }[] } | null;
   data_quality: {
@@ -218,7 +221,7 @@ interface Capacity {
  * `all` is every task in the window (any plan); `today` is the current planner day. Only days before
  * today are measured, because today's unfinished tasks aren't misses yet.
  */
-interface FinishedDay {
+export interface FinishedDay {
   date: string;
   tasks: Task[];
   bulkIds: Set<string>;
@@ -483,6 +486,7 @@ export function computeHabits(
     capacity: { weekday: capacityOf(false), weekend: capacityOf(true) },
     week_load: weekLoad,
     ratings: ratingStats,
+    transitions: computeTransitions(days, timeZone),
     best_times: { weekday: profile(false), weekend: profile(true) },
     carry_over: {
       overall: everyTask.length ? outcomeOf(everyTask, timeZone) : null,
