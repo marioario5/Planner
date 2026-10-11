@@ -1092,13 +1092,14 @@ class _TaskRowState extends State<TaskRow> with SingleTickerProviderStateMixin {
     final color = tagColor(task.tag);
     return Padding(
       padding: EdgeInsets.zero,
-      child: Row(children: [
+      // A Wrap, not a Row: on a narrow phone the timer text drops to its own line instead of running under the stop button.
+      child: Wrap(crossAxisAlignment: WrapCrossAlignment.center, children: [
         GestureDetector(
           behavior: HitTestBehavior.opaque,
           onTap: started ? widget.onToggle : widget.onStart,
-          // The padding around the visible button is part of the tap area (about 44 px tall), so it is easy to hit.
+          // The padding around the visible button is part of the tap area (about 36 px tall), so it is easy to hit.
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(0, 10, 10, 10),
+            padding: const EdgeInsets.fromLTRB(0, 6, 8, 6),
             child: Container(
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
               decoration: BoxDecoration(
@@ -1115,7 +1116,7 @@ class _TaskRowState extends State<TaskRow> with SingleTickerProviderStateMixin {
             behavior: HitTestBehavior.opaque,
             onTap: paused ? widget.onResume : widget.onPause,
             child: Padding(
-              padding: const EdgeInsets.fromLTRB(0, 10, 10, 10),
+              padding: const EdgeInsets.fromLTRB(0, 6, 8, 6),
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
                 decoration: BoxDecoration(
@@ -1127,8 +1128,11 @@ class _TaskRowState extends State<TaskRow> with SingleTickerProviderStateMixin {
               ),
             ),
           ),
-          Text(paused ? 'paused ${task.pausedLabel}' : 'since ${task.startedLabel}',
-              style: _px(5, cInkLight, height: 1.2)),
+          Padding(
+            padding: const EdgeInsets.only(right: 8),
+            child: Text(paused ? 'paused ${task.pausedLabel}' : 'since ${task.startedLabel}',
+                style: _px(5, cInkLight, height: 1.2)),
+          ),
         ],
       ]),
     );
@@ -1217,7 +1221,7 @@ class _TaskRowState extends State<TaskRow> with SingleTickerProviderStateMixin {
                       onTap: () => setState(() => _showNotes = !_showNotes),
                       child: Padding(
                         // generous invisible padding: a near miss here used to fall through and untick the task
-                        padding: const EdgeInsets.fromLTRB(0, 10, 40, 10),
+                        padding: const EdgeInsets.fromLTRB(0, 7, 40, 7),
                         child: Text(_showNotes ? '- hide how' : '+ how to start',
                           style: GoogleFonts.pressStart2p(
                               fontSize: 5, color: cInkLight, height: 1.6),

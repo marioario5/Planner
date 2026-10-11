@@ -421,17 +421,34 @@ void main() {
       expect([start.evaluate().length, pause.evaluate().length, resume.evaluate().length], [1, 0, 0]);
     });
 
-    testWidgets('PAUSE and RESUME have big tap areas: a miss 10 px below still hits', (tester) async {
+    testWidgets('PAUSE and RESUME have big tap areas: a miss 5 px below still hits', (tester) async {
       final task = await mount(tester, newTask(startedAt: t0));
       final r = tester.getRect(pause);
-      await tester.tapAt(Offset(r.center.dx, r.bottom + 10));
+      await tester.tapAt(Offset(r.center.dx, r.bottom + 5));
       await tester.pump();
       expect(task.phase, TaskPhase.paused);
       final r2 = tester.getRect(resume);
-      await tester.tapAt(Offset(r2.center.dx, r2.bottom + 10));
+      await tester.tapAt(Offset(r2.center.dx, r2.bottom + 5));
       await tester.pump();
       expect(task.phase, TaskPhase.running);
       expect(task.done, isFalse);
+    });
+
+    testWidgets('on a narrow phone nothing runs under the stop button or off the row', (tester) async {
+      // 320 px wide, the smallest phones: FINISH + RESUME + the timer text must wrap, not overlap or overflow
+      final task = await mount(tester, newTask(startedAt: t0, notes: 'how'));
+      await tester.binding.setSurfaceSize(const Size(320, 800));
+      await tester.pump();
+      await tester.tap(pause);
+      await tester.pump();
+      expect(task.phase, TaskPhase.paused);
+      final stopRect = tester.getRect(stop);
+      for (final f in [finish, resume, find.textContaining('paused ')]) {
+        final r = tester.getRect(f);
+        expect(r.overlaps(stopRect), isFalse, reason: 'a control overlaps the stop button');
+        expect(r.right, lessThanOrEqualTo(stopRect.left + 1), reason: 'a control runs under the right-hand buttons');
+      }
+      expect(tester.takeException(), isNull); // no RenderFlex overflow
     });
 
     testWidgets('the flag does not block START, and survives start/finish/untick', (tester) async {
@@ -448,15 +465,15 @@ void main() {
 
     testWidgets('hit areas are big: a near miss on the buttons still hits them, and never ticks the row', (tester) async {
       final task = await mount(tester, newTask(notes: 'how'));
-      // "+ how to start": 12 px below its text still opens the notes (it used to fall through and tick the task)
+      // "+ how to start": 9 px below its text still opens the notes (it used to fall through and tick the task)
       final how = tester.getCenter(find.text('+ how to start'));
-      await tester.tapAt(how + const Offset(0, 12));
+      await tester.tapAt(how + const Offset(0, 9));
       await tester.pump();
       expect(find.text('- hide how'), findsOneWidget);
       expect(task.done, isFalse);
-      // START: 10 px above and below its box still starts it
+      // START: 5 px below its box still starts it
       final r = tester.getRect(start);
-      await tester.tapAt(Offset(r.center.dx, r.bottom + 10));
+      await tester.tapAt(Offset(r.center.dx, r.bottom + 5));
       await tester.pump();
       expect(task.phase, TaskPhase.running);
       // the stop and flag buttons are at least 40 px
