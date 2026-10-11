@@ -76,7 +76,7 @@ const apiView = (t: Task) => ({
  *   POST   /mcp            MCP endpoint (Authorization: Bearer <token>)
  *   POST   /mcp/<token>    MCP endpoint for clients that can't send headers (claude.ai connectors)
  *   GET    /api/tasks?date=YYYY-MM-DD
- *   PATCH  /api/tasks/:id  {done?, started?, flagged?, title?, tag?, start?, minutes?, notes?}
+ *   PATCH  /api/tasks/:id  {done?, started?, paused?, flagged?, title?, tag?, start?, minutes?, notes?, restoreStarted?, restoreCompleted?, restorePausedMs?}
  *   PUT    /api/rating     {date?, rating: 1-5 | null}  how the day felt
  *   DELETE /api/tasks/:id
  */

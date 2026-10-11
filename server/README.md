@@ -8,7 +8,7 @@ Claude routine ──MCP──▶  Worker + D1  ◀──REST──  Flutter app
 ```
 
 - **MCP endpoint** (`/mcp`): Claude publishes the day's list and can read back what's checked off.
-- **REST API** (`/api/tasks`, `/api/rating`): what the phone app uses. Check-offs, Start presses, flags (a task whose times are wrong) and the day's 1 to 5 rating are stored, so Claude sees them too.
+- **REST API** (`/api/tasks`, `/api/rating`): what the phone app and the website use. Check-offs, Start presses, pauses (`paused` / `paused_ms`), flags (a task whose times are wrong) and the day's 1 to 5 rating are stored, so Claude sees them too. `PATCH /api/tasks/:id` takes `done`, `started`, `paused`, `flagged` (and `restoreStarted` / `restoreCompleted` / `restorePausedMs` with `done: true`, which puts an accidentally unticked task's times back).
 
 ## MCP tools
 
@@ -28,7 +28,8 @@ Claude routine ──MCP──▶  Worker + D1  ◀──REST──  Flutter app
 | `set_user_notes` | Record or update those notes (max 30 active, 20 per call), resolve one, or re-confirm one he said again. |
 | `delete_user_note` | Permanently delete one note, for example when he asks to be forgotten. |
 | `add_task` | Append one task to a plan (`plan?`, A by default). |
-| `update_task` | Change title / tag / time / notes, or set `done`. Pass `null` to clear `start`, `minutes` or `notes`. |
+| `update_task` | Change title / tag / time / notes, or set `done`. Pass `null` to clear `start`, `minutes` or `notes`. Hand fixes for a record: `completed` and `started_at` (HH:MM) correct a finished task's times, `paused_at` pauses a running task as of a time, `paused_min` sets the minutes already paused, and `done: false` with `started_at` reopens a task as running. The planner routine must not use it to tick or untick his work. |
+| `get_task_log` | The most recent changes to tasks (newest first): when, which task, what sent it (website, phone app, progress-site sync, planner tool) and what it asked for. For tracing a task that changed unexpectedly. Needs migration 0011. |
 | `delete_task` | Remove a task. |
 
 `tag` is one of `school`, `calculus3`, `sat`, `pcb`, `photography`, `college`, `other` (the app's colour tags; defaults to `school`).
@@ -165,6 +166,8 @@ npm run db:habits:remote    # 0006: habit notes (safe to repeat)
 npm run db:framework:remote # 0007: framework tables + tasks.commitment_id (the ALTER errors if already applied)
 npm run db:notes:remote     # 0008: user notes (safe to repeat)
 npm run db:start:remote     # 0009: Start press, flag, day rating, experiments (the two ALTERs error if already applied)
+npm run db:pause:remote     # 0010: pause button (paused_at, paused_ms; the ALTERs error if already applied)
+npm run db:log:remote       # 0011: the task change log (safe to repeat). Without it get_task_log is simply empty
 npm run deploy
 ```
 
