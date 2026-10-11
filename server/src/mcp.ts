@@ -449,6 +449,11 @@ const TOOLS = [
             "When he actually finished, 24-hour HH:MM on the task's planner day (00:00 to 03:59 means after midnight, the next morning). " +
             'Only with done: true, and not in the future.',
         },
+        paused_at: {
+          ...startProp,
+          description:
+            'Pause a task that is running as of this time (24-hour HH:MM on its planner day): the time since then is not counted in how long it took. Only for a task that is started and not finished; resume it in the app.',
+        },
         started_at: {
           ...startProp,
           description:
@@ -1003,12 +1008,22 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
     }
     case 'update_task': {
       const id = parseId(args.id);
-      const { id: _id, completed, started_at: startedAtArg, ...rest } = args;
+      const { id: _id, completed, started_at: startedAtArg, paused_at: pausedAtArg, ...rest } = args;
       const finishedTime = completed === undefined || completed === null ? null : parseStart(completed);
       if (finishedTime && rest.done !== true) throw new ValidationError('completed only goes with done: true');
       const startedTime = startedAtArg === undefined || startedAtArg === null ? null : parseStart(startedAtArg);
       if (startedTime && rest.done !== true) throw new ValidationError('started_at only goes with done: true');
-      const patch = parsePatch(rest);
+      const pausedTime = pausedAtArg === undefined || pausedAtArg === null ? null : parseStart(pausedAtArg);
+      const patch = pausedTime ? parsePatch({ ...rest, paused: true }) : parsePatch(rest);
+      if (pausedTime) {
+        const existing = await store.get(id);
+        if (!existing) throw new ValidationError(`no task with id ${id}`);
+        if (!existing.startedAt || existing.done) throw new ValidationError('paused_at only works on a task that is started and not finished');
+        const pausedMs = plannerTimeToEpoch(existing.date, pausedTime, timeZone);
+        if (pausedMs < Date.parse(existing.startedAt)) throw new ValidationError(`${pausedTime} is before the task was started`);
+        if (pausedMs > (now ?? new Date()).getTime() + 60_000) throw new ValidationError(`${pausedTime} on ${existing.date} hasn't happened yet`);
+        patch.pausedAtIso = new Date(pausedMs).toISOString();
+      }
       if (startedTime) {
         const existing = await store.get(id);
         if (!existing) throw new ValidationError(`no task with id ${id}`);

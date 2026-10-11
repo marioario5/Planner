@@ -1457,6 +1457,32 @@ describe('start button, flag and day rating (app API)', () => {
       expect(await listed()).toMatchObject({ started: '16:00', completed: '17:00', actual_min: 45, paused_min: 15 });
     });
 
+    it('update_task can pause a running task as of an earlier time (paused_at)', async () => {
+      const id = await makeTask();
+      store.clock = () => at(16, 0);
+      await patch(id, { started: true });
+      store.clock = () => at(16, 50);
+      const { data } = await tool('update_task', { id, paused_at: '16:30' });
+      expect(data.updated).toMatchObject({ started: '16:00', paused_now: true });
+      expect((await call('/api/tasks')).ok).toBe(true);
+      const task = (((await (await call('/api/tasks')).json()) as any).tasks as any[])[0];
+      expect(task.paused).toBe('2026-10-01T23:30:00.000Z');
+      store.clock = () => at(17, 0);
+      await patch(id, { paused: false }); // resume at 17:00: 30 min paused
+      await patch(id, { done: true });
+      expect(await listed()).toMatchObject({ paused_min: 30, actual_min: 30 });
+      const bad = await tool('update_task', { id, paused_at: '16:10' }); // finished now
+      expect(JSON.stringify(bad)).toContain('started and not finished');
+    });
+
+    it('paused_at must be after the start', async () => {
+      const id = await makeTask();
+      store.clock = () => at(16, 0);
+      await patch(id, { started: true });
+      store.clock = () => at(16, 20);
+      expect(JSON.stringify(await tool('update_task', { id, paused_at: '15:00' }))).toContain('before the task was started');
+    });
+
     it('finishing while paused ends the pause at the finish time', async () => {
       const id = await makeTask();
       store.clock = () => at(16, 0);

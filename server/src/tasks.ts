@@ -61,6 +61,8 @@ export interface TaskPatch {
   started?: boolean;
   /** true = pause the timer (only while it is running); false = resume. Finishing a paused task ends the pause. */
   paused?: boolean;
+  /** Only with `paused: true`, set by the MCP tool: the moment he paused (ISO) instead of "now". Replaces an earlier pause time. */
+  pausedAtIso?: string;
   /** true = flag the task's times as unreliable; false = unflag. */
   flagged?: boolean;
   /** Only with done: true. Puts back the Start press and finish time from before an accidental untick. */
@@ -484,7 +486,7 @@ export function nextPause(
   if (patch.started === false || patch.done === false) return { pausedAt: null, pausedMs: 0 };
   let { pausedAt, pausedMs } = cur;
   const gap = (from: string, to: string) => Math.max(0, Date.parse(to) - Date.parse(from));
-  if (patch.paused === true && cur.startedAt && !cur.done && !pausedAt) pausedAt = nowIso;
+  if (patch.paused === true && cur.startedAt && !cur.done && (!pausedAt || patch.pausedAtIso)) pausedAt = patch.pausedAtIso ?? nowIso;
   else if (patch.paused === false && pausedAt) {
     pausedMs += gap(pausedAt, nowIso);
     pausedAt = null;
