@@ -485,6 +485,8 @@ export function nextPause(
 ): { pausedAt: string | null; pausedMs: number } {
   if (patch.started === false || patch.done === false) return { pausedAt: null, pausedMs: 0 };
   let { pausedAt, pausedMs } = cur;
+  // A finished task has nothing to pause or resume (its pause ended when it was finished): a late Resume changes nothing.
+  if (cur.done && patch.done !== true) return { pausedAt, pausedMs };
   const gap = (from: string, to: string) => Math.max(0, Date.parse(to) - Date.parse(from));
   if (patch.paused === true && cur.startedAt && !cur.done && (!pausedAt || patch.pausedAtIso)) pausedAt = patch.pausedAtIso ?? nowIso;
   else if (patch.paused === false && pausedAt) {
@@ -499,4 +501,13 @@ export function nextPause(
     if (patch.restorePausedMs !== undefined) pausedMs = patch.restorePausedMs;
   }
   return { pausedAt, pausedMs };
+}
+
+/** The pause state after a task is finished at `atIso` by a path that is not a PATCH (the progress-site sync): an open pause ends then. */
+export function closePauseAt(
+  cur: Pick<Task, 'pausedAt' | 'pausedMs'>,
+  atIso: string,
+): { pausedAt: string | null; pausedMs: number } {
+  if (!cur.pausedAt) return { pausedAt: null, pausedMs: cur.pausedMs };
+  return { pausedAt: null, pausedMs: cur.pausedMs + Math.max(0, Date.parse(atIso) - Date.parse(cur.pausedAt)) };
 }

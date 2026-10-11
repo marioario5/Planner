@@ -19,6 +19,7 @@ import {
   type Task,
   type TaskPatch,
   type TaskStore,
+  closePauseAt,
   nextPause,
 } from './tasks';
 
@@ -261,9 +262,16 @@ export class D1TaskStore implements TaskStore {
   }
 
   async setDoneFromSite(id: string, done: boolean, atMs: number): Promise<void> {
+    // Finishing ends an open pause at the finish time; unticking starts the task over.
+    const cur = done ? await this.get(id) : null;
+    const closed = cur ? closePauseAt(cur, new Date(atMs).toISOString()) : null;
     await this.db
-      .prepare(`UPDATE tasks SET done = ?, done_at = ?, completed_at = ?${done ? '' : ', started_at = NULL, paused_at = NULL, paused_ms = 0'} WHERE id = ?`)
-      .bind(done ? 1 : 0, atMs, done ? new Date(atMs).toISOString() : null, id)
+      .prepare(
+        `UPDATE tasks SET done = ?, done_at = ?, completed_at = ?${
+          done ? ', paused_at = ?, paused_ms = ?' : ', started_at = NULL, paused_at = NULL, paused_ms = 0'
+        } WHERE id = ?`,
+      )
+      .bind(done ? 1 : 0, atMs, done ? new Date(atMs).toISOString() : null, ...(closed ? [closed.pausedAt, closed.pausedMs] : []), id)
       .run();
   }
 

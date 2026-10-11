@@ -1,4 +1,5 @@
 import {
+  closePauseAt,
   nextPause,
   normalizeTitle,
   type Commitment,
@@ -116,6 +117,11 @@ export class MemoryTaskStore implements TaskStore {
     task.done = done;
     task.doneAt = atMs;
     task.completedAt = done ? new Date(atMs).toISOString() : null;
+    if (done) {
+      const closed = closePauseAt(task, new Date(atMs).toISOString());
+      task.pausedAt = closed.pausedAt;
+      task.pausedMs = closed.pausedMs;
+    }
     if (!done) {
       task.startedAt = null;
       task.pausedAt = null;

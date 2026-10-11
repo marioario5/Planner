@@ -76,6 +76,22 @@ describe('site -> planner', () => {
     expect(site.entry('calc3-t6')).toEqual(['calc3-t6', 1, 7000]); // site's own stamp kept
   });
 
+  it('a tick from the site ends an open pause at that time, and a late Resume then changes nothing', async () => {
+    store.clock = () => 1_000_000;
+    const { data } = await publish([{ title: 'Calc 3 lesson', siteKey: 'calc3-t6' }]);
+    const id = data.tasks[0].id;
+    await patch(id, { started: true });
+    store.clock = () => 2_000_000;
+    await patch(id, { paused: true });
+    site.siteSets('calc3-t6', true, 5_000_000); // he ticks it on the progress site while it is paused
+    let task = (await rest())[0];
+    expect(task).toMatchObject({ done: true, paused: null, paused_ms: 3_000_000 });
+    store.clock = () => 9_000_000;
+    await patch(id, { paused: false }); // a stale Resume arrives from the phone afterwards
+    task = (await rest())[0];
+    expect(task).toMatchObject({ done: true, paused: null, paused_ms: 3_000_000 });
+  });
+
   it('get_history sees ticks made on the site', async () => {
     await tool('set_daily_plan', { date: '2026-09-30', tasks: [{ title: 'Old lesson', siteKey: 'calc3-t6' }] });
     expect((await tool('get_history', { days: 3 })).data.done).toBe(0);
