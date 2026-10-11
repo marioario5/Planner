@@ -95,6 +95,7 @@ export class MemoryTaskStore implements TaskStore {
       if (patch.done && patch.restoreStarted) task.startedAt = patch.restoreStarted;
       if (!patch.done && patch.started === undefined) task.startedAt = null; // unticking starts it over
     }
+    if (patch.startedAtIso) task.startedAt = patch.startedAtIso;
     return task;
   }
 

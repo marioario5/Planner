@@ -438,8 +438,23 @@ describe('check-off timing', () => {
     await tick(id, at(17, 10));
     const { data: fixed } = await tool('update_task', { id, done: true, completed: '16:20', started_at: '15:35' });
     expect(fixed.updated).toMatchObject({ completed: '16:20', started: '15:35' });
-    const bad = await tool('update_task', { id, started_at: '15:35' });
-    expect(JSON.stringify(bad)).toContain('started_at only goes with done');
+    // alone, started_at just re-times the Start press of the task, finished or not
+    const alone = await tool('update_task', { id, started_at: '15:40' });
+    expect(alone.data.updated).toMatchObject({ done: true, started: '15:40', completed: '16:20' });
+  });
+
+  it('update_task can reopen a finished task as running since a time, with minutes already paused', async () => {
+    const { data } = await threeBlocks();
+    const id = data.tasks.find((x: any) => x.title === 'A').id;
+    await tick(id, at(17, 10));
+    const { data: reopened } = await tool('update_task', { id, done: false, started_at: '15:35', paused_min: 20 });
+    expect(reopened.updated).toMatchObject({ done: false, completed: null, started: '15:35', paused_min: 20 });
+    expect(reopened.updated.paused_now).toBeUndefined(); // running, not paused
+    // finishing it later takes the 20 paused minutes off the real duration
+    await tick(id, at(16, 35));
+    const day = (await tool('list_tasks', {})).data.tasks.find((x: any) => x.id === id);
+    expect(day).toMatchObject({ started: '15:35', completed: '16:35', paused_min: 20, actual_min: 40 });
+    expect(JSON.stringify(await tool('update_task', { id, paused_min: -1 }))).toContain('paused_min must be');
   });
 
   it('reports lateness per task and a day summary, flagging out-of-order work', async () => {

@@ -84,6 +84,9 @@ export interface TaskPatch {
   restoreCompleted?: string | null;
   /** Milliseconds of pauses to put back with the above. */
   restorePausedMs?: number;
+  /** Set by the MCP tool to fix a record by hand: the Start press (ISO) and the finished-pause total, applied after everything else. */
+  startedAtIso?: string;
+  pausedMsSet?: number;
 }
 
 /** A titled block of text Claude writes for the day (warnings, pre-start, next PCB work...); each is a button in the app. */
@@ -365,7 +368,7 @@ export function parseNewTasks(value: unknown): NewTask[] {
   return value.map(parseNewTask);
 }
 
-export function parsePatch(value: unknown): TaskPatch {
+export function parsePatch(value: unknown, allowEmpty = false): TaskPatch {
   if (typeof value !== 'object' || value === null) {
     throw new ValidationError('patch must be an object');
   }
@@ -411,7 +414,7 @@ export function parsePatch(value: unknown): TaskPatch {
       patch.restorePausedMs = restorePausedMs;
     }
   }
-  if (Object.keys(patch).length === 0) {
+  if (Object.keys(patch).length === 0 && !allowEmpty) {
     throw new ValidationError('nothing to update: pass title, tag, start, minutes, notes, siteKey, done, started, paused, or flagged');
   }
   return patch;
@@ -501,7 +504,10 @@ export function nextPause(
   patch: TaskPatch,
   nowIso: string,
 ): { pausedAt: string | null; pausedMs: number } {
-  if (patch.started === false || patch.done === false) return { pausedAt: null, pausedMs: 0 };
+  if (patch.started === false || patch.done === false) {
+    // starts over; a hand fix (MCP) can then put a pause total back
+    return patch.pausedMsSet !== undefined ? { pausedAt: null, pausedMs: patch.pausedMsSet } : { pausedAt: null, pausedMs: 0 };
+  }
   let { pausedAt, pausedMs } = cur;
   // A finished task has nothing to pause or resume (its pause ended when it was finished): a late Resume changes nothing.
   if (cur.done && patch.done !== true) return { pausedAt, pausedMs };
@@ -518,6 +524,7 @@ export function nextPause(
     }
     if (patch.restorePausedMs !== undefined) pausedMs = patch.restorePausedMs;
   }
+  if (patch.pausedMsSet !== undefined) pausedMs = patch.pausedMsSet;
   return { pausedAt, pausedMs };
 }
 

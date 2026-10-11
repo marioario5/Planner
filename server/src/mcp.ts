@@ -472,7 +472,13 @@ const TOOLS = [
         started_at: {
           ...startProp,
           description:
-            "Fixes when he actually pressed Start, 24-hour HH:MM on the task's planner day. Only with done: true; pair it with `completed` to keep the finish time.",
+            "Fixes when he actually pressed Start, 24-hour HH:MM on the task's planner day. With done: true it corrects a finished task (pair it with `completed` to keep the finish time); with done: false or alone it starts or re-times an unfinished one, so a task can be reopened as running since then.",
+        },
+        paused_min: {
+          type: 'integer',
+          minimum: 0,
+          maximum: 1440,
+          description: 'Fixes the total minutes already spent paused (taken off how long it took). Use with started_at to rebuild a task\'s timer by hand, e.g. done: false, started_at 19:19, paused_min 91.',
         },
       },
       required: ['id'],
@@ -1044,13 +1050,13 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
     }
     case 'update_task': {
       const id = parseId(args.id);
-      const { id: _id, completed, started_at: startedAtArg, paused_at: pausedAtArg, ...rest } = args;
+      const { id: _id, completed, started_at: startedAtArg, paused_at: pausedAtArg, paused_min: pausedMinArg, ...rest } = args;
       const finishedTime = completed === undefined || completed === null ? null : parseStart(completed);
       if (finishedTime && rest.done !== true) throw new ValidationError('completed only goes with done: true');
       const startedTime = startedAtArg === undefined || startedAtArg === null ? null : parseStart(startedAtArg);
-      if (startedTime && rest.done !== true) throw new ValidationError('started_at only goes with done: true');
       const pausedTime = pausedAtArg === undefined || pausedAtArg === null ? null : parseStart(pausedAtArg);
-      const patch = pausedTime ? parsePatch({ ...rest, paused: true }) : parsePatch(rest);
+      const timerFix = startedTime !== null || (pausedMinArg !== undefined && pausedMinArg !== null);
+      const patch = pausedTime ? parsePatch({ ...rest, paused: true }) : parsePatch(rest, timerFix);
       if (pausedTime) {
         const existing = await store.get(id);
         if (!existing) throw new ValidationError(`no task with id ${id}`);
@@ -1060,10 +1066,20 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
         if (pausedMs > (now ?? new Date()).getTime() + 60_000) throw new ValidationError(`${pausedTime} on ${existing.date} hasn't happened yet`);
         patch.pausedAtIso = new Date(pausedMs).toISOString();
       }
+      if (pausedMinArg !== undefined && pausedMinArg !== null) {
+        if (typeof pausedMinArg !== 'number' || !Number.isInteger(pausedMinArg) || pausedMinArg < 0 || pausedMinArg > 1440) {
+          throw new ValidationError('paused_min must be a whole number of minutes (0 to 1440)');
+        }
+        patch.pausedMsSet = pausedMinArg * 60_000;
+      }
       if (startedTime) {
         const existing = await store.get(id);
         if (!existing) throw new ValidationError(`no task with id ${id}`);
-        patch.restoreStarted = new Date(plannerTimeToEpoch(existing.date, startedTime, timeZone)).toISOString();
+        const startedMs = plannerTimeToEpoch(existing.date, startedTime, timeZone);
+        if (startedMs > (now ?? new Date()).getTime() + 60_000) throw new ValidationError(`${startedTime} on ${existing.date} hasn't happened yet`);
+        // With done: true it fixes the Start press of a finished task; otherwise it sets (or moves) the Start press of an unfinished one.
+        if (rest.done === true) patch.restoreStarted = new Date(startedMs).toISOString();
+        else patch.startedAtIso = new Date(startedMs).toISOString();
       }
       checkSiteKeys([patch.siteKey], ctx);
 

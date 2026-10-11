@@ -216,7 +216,11 @@ export class D1TaskStore implements TaskStore {
         values.push(patch.restoreStarted);
       }
       // Unticking starts the task over: forget the Start press (unless the same patch sets one).
-      if (!patch.done && patch.started === undefined) sets.push('started_at = NULL');
+      if (!patch.done && patch.started === undefined && !patch.startedAtIso) sets.push('started_at = NULL');
+    }
+    if (patch.startedAtIso) {
+      sets.push('started_at = ?');
+      values.push(patch.startedAtIso);
     }
     if (patch.started !== undefined) {
       // Keep the first press: starting twice does not move the start.
@@ -235,7 +239,7 @@ export class D1TaskStore implements TaskStore {
         sets.push('flagged_at = NULL');
       }
     }
-    if (patch.paused !== undefined || patch.restorePausedMs !== undefined || patch.done !== undefined || patch.started === false) {
+    if (patch.paused !== undefined || patch.restorePausedMs !== undefined || patch.pausedMsSet !== undefined || patch.done !== undefined || patch.started === false) {
       const cur = await this.get(id);
       if (!cur) return null;
       const next = nextPause(cur, patch, new Date().toISOString());
