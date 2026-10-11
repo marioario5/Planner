@@ -390,6 +390,17 @@ describe('week load (how heavy the last 7 days were)', () => {
     expect(w).toMatchObject({ level: 'normal', late_finish_days: 0, missed_or_carried_pct: 0, reasons: [] });
   });
 
+  it('a late dinner or wrap-up tick is not a late finish of the work', () => {
+    const tasks = WEEK.flatMap((date) => [
+      task({ date, start: '16:00', minutes: 60, tick: '17:30' }),
+      task({ date, start: '17:00', minutes: 60, tick: '19:00' }),
+      task({ date, tag: 'other', start: '20:00', minutes: 5, tick: '23:45' }), // the bedtime wrap-up
+    ]);
+    const w = computeHabits(tasks, TZ, TODAY).week_load;
+    expect(w.late_finish_days).toBe(0);
+    expect(w.reasons).toEqual([]);
+  });
+
   it('is elevated with a single reason', () => {
     const tasks = WEEK.map((date, i) => task({ date, start: '16:00', minutes: 60, tick: i < 4 ? '23:30' : '17:30' }));
     const w = computeHabits(tasks, TZ, TODAY).week_load;

@@ -2,6 +2,7 @@
 // Stateless is enough here: every tool is a self-contained read or write, so there's
 // no session to track and each POST can be answered on its own.
 
+import { rowsOf } from './firebase';
 import { localTime, plannerToday, plannerTimeToEpoch, resolveDate, shiftDate } from './dates';
 import { MAX_DEFER_DAYS, MAX_OPEN_COMMITMENTS, computeFramework, unaddressed } from './framework';
 import { MAX_ACTIVE_NOTES, resolvedToPrune, viewUserNotes } from './user-notes';
@@ -209,6 +210,31 @@ const TOOLS = [
           ...dateProp,
           description: 'Last day to include, YYYY-MM-DD. Defaults to today in the planner time zone.',
         },
+      },
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'get_server_status',
+    description:
+      'Whether the planner server is healthy: which database migrations are missing (with the exact npm command to run for each, oldest first), ' +
+      'and whether the progress-site sync is configured. A missing migration otherwise fails quietly (for example the change log stays empty), so check this after a deploy.',
+    inputSchema: { type: 'object', properties: {} },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'get_site_progress',
+    description:
+      "His progress site's exact check-off state, read straight from the site's database (not a summary): `tasks` are the site's task rows " +
+      '(id, done, when it was last changed), `calc3_rest` are the Calc 3 rest-day slot numbers, and `cal` are his calendar items with dates and whether they are checked. ' +
+      'Use it as the source of truth for Calc 3 (it replaces fetching the site data by URL). An item is done if it is checked as a task or as a calendar item with the same wording. ' +
+      'Optional `prefix` keeps only task ids starting with it (default "calc3-"; pass "" for every task) and `cal_from` / `cal_to` (YYYY-MM-DD) bound the calendar items (default today to 45 days ahead).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        prefix: { type: 'string', maxLength: 40, description: 'Only task ids starting with this. Default "calc3-"; "" = all.' },
+        cal_from: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'First calendar date to include. Default today.' },
+        cal_to: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'Last calendar date to include. Default 45 days from today.' },
       },
     },
     annotations: { readOnlyHint: true },
@@ -960,6 +986,51 @@ async function history(args: Json, ctx: McpContext): Promise<Json> {
   return { from, through, done, total, days: out };
 }
 
+/** His progress site's state, exactly as stored, shaped for reading (see the get_site_progress tool). */
+async function siteProgress(args: Json, ctx: McpContext): Promise<Json> {
+  if (!ctx.sync) throw new ValidationError('the progress site is not connected to this server (FIREBASE_STATE_URL is not set)');
+  const prefix = typeof args.prefix === 'string' ? args.prefix : 'calc3-';
+  const today = plannerToday(ctx.timeZone, ctx.now);
+  const from = typeof args.cal_from === 'string' ? resolveDate(args.cal_from, ctx.timeZone, ctx.now) : today;
+  const to = typeof args.cal_to === 'string' ? resolveDate(args.cal_to, ctx.timeZone, ctx.now) : shiftDate(today, 45);
+  let snap;
+  try {
+    snap = await ctx.sync.site.read();
+  } catch (err) {
+    throw new ValidationError(`could not read the progress site: ${err instanceof Error ? err.message : 'unknown error'}`);
+  }
+  const when = (ms: number): string | null => (ms > 0 ? `${localDate(new Date(ms).toISOString(), ctx.timeZone)} ${localTime(new Date(ms).toISOString(), ctx.timeZone)}` : null);
+  const state = snap.state;
+
+  const tasks = [...snap.entries.entries()]
+    .filter(([id]) => id.startsWith(prefix))
+    .map(([id, e]) => ({ id, done: e.v, changed: when(e.t) }))
+    .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
+
+  // calendar items are [ "YYYY-M-D|title", 0|1, epochMs ] (the month and day are not zero-padded)
+  const cal = rowsOf(state.cal)
+    .filter((r): r is [string, number, number] => Array.isArray(r) && typeof r[0] === 'string')
+    .map((r) => {
+      const bar = r[0].indexOf('|');
+      const [y, m, d] = (bar > 0 ? r[0].slice(0, bar) : '').split('-').map(Number);
+      const date = y && m && d ? `${String(y).padStart(4, '0')}-${String(m).padStart(2, '0')}-${String(d).padStart(2, '0')}` : null;
+      return { date, title: bar > 0 ? r[0].slice(bar + 1) : r[0], done: r[1] === 1, changed: when(Number(r[2]) || 0) };
+    })
+    .filter((c) => c.date !== null && c.date >= from && c.date <= to)
+    .sort((a, b) => (a.date! < b.date! ? -1 : a.date! > b.date! ? 1 : 0));
+
+  const days = (state.days as { value?: { calc3?: { rest?: unknown; sig?: unknown } } } | undefined)?.value?.calc3;
+  return {
+    site_updated: typeof state.at === 'number' ? when(state.at) : null,
+    prefix,
+    tasks,
+    calc3_rest: Array.isArray(days?.rest) ? days!.rest : [],
+    calc3_rest_note: 'Rest-day slot numbers, counted from slot 0 = Sat Sept 19, 2026 (see the planner rules for how slots map to lessons).',
+    calendar_range: { from, to },
+    cal,
+  };
+}
+
 async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json> {
   const { store, timeZone, now } = ctx;
   switch (name) {
@@ -1000,13 +1071,29 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
     }
     case 'get_history':
       return history(args, ctx);
+    case 'get_server_status': {
+      const schema = await store.schemaReport();
+      return {
+        database: schema.ok ? 'ok' : 'needs migration',
+        missing: schema.missing,
+        run_in_order: schema.run_in_order,
+        ...(schema.ok ? {} : { how: 'Run these in server/ (answer yes if asked), oldest first; no deploy is needed afterwards.' }),
+        progress_site_sync: ctx.sync ? 'configured' : 'off (FIREBASE_STATE_URL is not set)',
+        planner_time_zone: timeZone,
+      };
+    }
+    case 'get_site_progress':
+      return siteProgress(args, ctx);
     case 'get_task_log': {
       const limit = typeof args.limit === 'number' ? Math.min(200, Math.max(1, Math.floor(args.limit))) : 40;
       const filter = typeof args.task === 'string' ? args.task.trim().toLowerCase() : '';
       const events = (await store.listEvents(filter ? 500 : limit))
         .filter((ev) => !filter || (ev.title ?? '').toLowerCase().includes(filter))
         .slice(0, limit);
+      const schema = await store.schemaReport();
+      const logMissing = schema.missing.some((m) => m.what === 'table task_events');
       return {
+        ...(logMissing ? { note: 'The change log table does not exist yet, so nothing has been recorded. Run `npm run db:log:remote` in server/.' } : {}),
         events: events.map((ev) => ({
           at: `${localDate(ev.at, timeZone)} ${localTime(ev.at, timeZone)}`,
           task: ev.title,

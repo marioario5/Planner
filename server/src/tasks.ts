@@ -52,6 +52,8 @@ export interface TaskEvent {
 
 export const TASK_EVENTS_KEPT = 500;
 
+import type { SchemaReport } from './schema-check';
+
 export interface NewTask {
   title: string;
   tag: Tag;
@@ -217,6 +219,8 @@ export interface TaskStore {
   get(id: string): Promise<Task | null>;
   /** Records when a task was really finished, without changing when it was ticked (which drives site sync). */
   setCompletedAt(id: string, atMs: number): Promise<void>;
+  /** Which database migrations are missing (always ok for the in-memory test store). */
+  schemaReport(): Promise<SchemaReport>;
   /** Notes one change to a task (the newest 500 are kept). Never throws: logging must not break the change itself. */
   logEvent(e: Omit<TaskEvent, 'id' | 'at'>): Promise<void>;
   /** Newest first. */

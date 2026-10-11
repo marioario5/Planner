@@ -1,0 +1,36 @@
+name: Tests
+
+# Runs the server + website tests (vitest) and the phone-app tests on every push, so a broken change is caught before it ships.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  server-and-site:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx vitest run
+
+  app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.32.0' # the same version the iOS build uses
+          cache: true
+      - run: flutter pub get
+      - run: flutter analyze lib
+      - run: flutter test

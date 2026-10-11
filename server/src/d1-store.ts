@@ -1,3 +1,4 @@
+import { checkSchema, type SchemaReport } from './schema-check';
 import {
   normalizeTitle,
   type Commitment,
@@ -265,6 +266,12 @@ export class D1TaskStore implements TaskStore {
   async remove(id: string): Promise<boolean> {
     const result = await this.db.prepare('DELETE FROM tasks WHERE id = ?').bind(id).run();
     return result.meta.changes > 0;
+  }
+
+  async schemaReport(): Promise<SchemaReport> {
+    const tables = await this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all<{ name: string }>();
+    const columns = await this.db.prepare('PRAGMA table_info(tasks)').all<{ name: string }>();
+    return checkSchema(new Set(tables.results.map((r) => r.name)), new Set(columns.results.map((r) => r.name)));
   }
 
   async logEvent(e: Omit<TaskEvent, 'id' | 'at'>): Promise<void> {

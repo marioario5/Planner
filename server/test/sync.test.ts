@@ -315,3 +315,79 @@ describe('advertised tool schemas', () => {
     expect(key.test('has space')).toBe(false);
   });
 });
+
+describe('get_site_progress: the progress site read exactly', () => {
+  beforeEach(() => {
+    site.state = {
+      ...site.state,
+      tasks: [
+        ['calc3-t10', 0, 3000],
+        ['calc3-t9', 1, 2000],
+        ['master-t1', 1, 1000],
+        ['sat-t1', 0, 0],
+      ],
+      cal: [
+        ['2026-10-3|Later this week', 0, 5],
+        ['2026-10-1|Today item', 1, 1790900000000],
+        ['2026-8-26|Long ago', 1, 5],
+        ['2026-12-25|Far away', 0, 5],
+        ['not-a-date|junk', 1, 5],
+      ],
+      at: 1790900000000,
+    };
+  });
+
+  it('returns the calc 3 rows in numeric order, the rest slots, and the calendar window', async () => {
+    const { data } = await tool('get_site_progress', {});
+    expect(data.prefix).toBe('calc3-');
+    expect(data.tasks.map((t: any) => [t.id, t.done])).toEqual([['calc3-t9', true], ['calc3-t10', false]]); // t9 before t10
+    expect(data.calc3_rest).toEqual([1, 2]);
+    expect(data.calendar_range).toEqual({ from: '2026-10-01', to: '2026-11-15' });
+    expect(data.cal.map((c: any) => [c.date, c.title, c.done])).toEqual([
+      ['2026-10-01', 'Today item', true],
+      ['2026-10-03', 'Later this week', false],
+    ]);
+    expect(data.site_updated).toMatch(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/);
+  });
+
+  it('takes a prefix ("" = every task) and its own calendar window', async () => {
+    const all = (await tool('get_site_progress', { prefix: '' })).data;
+    expect(all.tasks.map((t: any) => t.id)).toEqual(['calc3-t9', 'calc3-t10', 'master-t1', 'sat-t1']);
+    const wide = (await tool('get_site_progress', { prefix: 'sat-', cal_from: '2026-08-01', cal_to: '2026-12-31' })).data;
+    expect(wide.tasks.map((t: any) => t.id)).toEqual(['sat-t1']);
+    expect(wide.cal).toHaveLength(4);
+    expect(wide.cal[0]).toMatchObject({ date: '2026-08-26', title: 'Long ago' });
+  });
+
+  it('says so plainly when the site is not connected or cannot be reached', async () => {
+    const off = await tool('get_site_progress', {}, null);
+    expect(off.isError).toBe(true);
+    expect(off.text).toContain('not connected');
+    site.down = true;
+    const down = await tool('get_site_progress', {});
+    expect(down.isError).toBe(true);
+    expect(down.text).toContain('could not read the progress site');
+  });
+});
+
+describe('get_server_status and the change-log hint', () => {
+  it('reports a healthy database and whether the site sync is on', async () => {
+    const ok = (await tool('get_server_status', {})).data;
+    expect(ok).toMatchObject({ database: 'ok', missing: [], run_in_order: [], progress_site_sync: 'configured' });
+    expect((await tool('get_server_status', {}, null)).data.progress_site_sync).toContain('off');
+  });
+
+  it('lists what is missing with the commands to run, and the task log explains an empty log', async () => {
+    store.schema = {
+      ok: false,
+      missing: [{ what: 'table task_events', migration: '0011_task_events', run: 'npm run db:log:remote' }],
+      run_in_order: ['npm run db:log:remote'],
+    };
+    const status = (await tool('get_server_status', {})).data;
+    expect(status).toMatchObject({ database: 'needs migration', run_in_order: ['npm run db:log:remote'] });
+    expect(status.how).toContain('no deploy is needed');
+    const log = (await tool('get_task_log', {})).data;
+    expect(log.events).toEqual([]);
+    expect(log.note).toContain('npm run db:log:remote');
+  });
+});

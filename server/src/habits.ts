@@ -185,7 +185,7 @@ export interface WeekLoad {
   /** The usual finished work minutes on a day over the whole window, the yardstick for the figures below. */
   typical_done_minutes: number | null;
   days_above_typical: number;
-  /** Days whose last trustworthy check-off was at or after 23:00: a sleep cost. */
+  /** Days whose last trustworthy work-block check-off (not dinner or the wrap-up) was at or after 23:00: a sleep cost. */
   late_finish_days: number;
   /** Share of the week's work blocks not finished on their own day. */
   missed_or_carried_pct: number;
@@ -425,7 +425,8 @@ export function computeHabits(
     const donePerDay = Math.round(weekDays.reduce((n, d) => n + doneWorkMinutes(d), 0) / weekDays.length);
     const above = weekDays.filter((d) => doneWorkMinutes(d) > typicalDone).length;
     const lateDays = weekDays.filter((d) => {
-      const finished = d.tasks.map((t) => completedMinutes(t, timeZone, d.bulkIds)).filter((m): m is number => m !== null);
+      // work blocks only: a late dinner or the bedtime wrap-up tick is not a late finish of the work
+      const finished = d.tasks.filter(isWork).map((t) => completedMinutes(t, timeZone, d.bulkIds)).filter((m): m is number => m !== null);
       return finished.length > 0 && Math.max(...finished) >= LATE_FINISH_MINUTES;
     }).length;
     const notDone = work.filter((t) => !t.done || isBackfilled(t, timeZone)).length;
@@ -436,7 +437,7 @@ export function computeHabits(
       reasons.push(`worked more than his typical ${typicalDone} min on ${above} of ${weekDays.length} days`);
     }
     if (lateDays >= LATE_FINISH_DAYS) {
-      reasons.push(`last check-off at or after 23:00 on ${lateDays} of ${weekDays.length} days (sleep cost)`);
+      reasons.push(`last work block finished at or after 23:00 on ${lateDays} of ${weekDays.length} days (sleep cost)`);
     }
     if (typicalDone > 0 && plannedPerDay >= OVERASKED_RATIO * typicalDone && missedPct >= OVERASKED_MISSED_PCT) {
       reasons.push(`asked for ~${plannedPerDay} min a day but finishes ~${donePerDay}; ${missedPct}% of blocks missed or carried over`);

@@ -1,3 +1,4 @@
+import { SCHEMA_OK, type SchemaReport } from '../src/schema-check';
 import {
   TASK_EVENTS_KEPT,
   type TaskEvent,
@@ -114,7 +115,13 @@ export class MemoryTaskStore implements TaskStore {
     if (task?.done) task.completedAt = new Date(atMs).toISOString();
   }
 
+  schema: SchemaReport = SCHEMA_OK;
   events: TaskEvent[] = [];
+
+  async schemaReport(): Promise<SchemaReport> {
+    return this.schema;
+  }
+
   private eventSeq = 0;
 
   async logEvent(e: Omit<TaskEvent, 'id' | 'at'>): Promise<void> {
