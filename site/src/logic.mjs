@@ -1,14 +1,17 @@
 // The planner website's logic, with no DOM in it so it can be tested on its own.
 // It mirrors the phone app (lib/task_model.dart, lib/tasks_service.dart): the same task rules and the same server calls.
 //
-//   phase    visible controls               tap START     tap FINISH / row    tap STOP   untick
-//   idle     START                          -> running    -> done (no timer)  -         -
-//   running  FINISH + stop (under flag)     -             -> done             -> idle    -
-//   done     (just "started 4:20pm")        -             -                   -          -> idle
+//   phase    visible controls                   START      PAUSE      RESUME     FINISH / row         STOP     untick
+//   idle     START                              -> running -          -          -> done (no timer)   -        -
+//   running  PAUSE + FINISH + stop (by flag)    -          -> paused  -          -> done              -> idle  -
+//   paused   RESUME + FINISH + stop (by flag)   -          -          -> running -> done (pause ends) -> idle  -
+//   done     (just "started 4:20pm")            -          -          -          -                    -        -> idle
 //
 // - Ticking the row is the same as FINISH, and works from idle (a tick with no Start press has no real duration).
-// - Unticking always starts the task over: the Start press goes with it, so START shows again.
-// - STOP only exists while running. It forgets the Start press; it never ticks or unticks.
+// - Unticking always starts the task over: the Start press and pauses go with it, so START shows again
+//   (ticking again within 10 seconds undoes that; see undoSnapshot).
+// - PAUSE records when; the time until RESUME is not counted in the block's real duration. A finished task never pauses.
+// - STOP only exists while running or paused. It forgets the Start press and any pauses; it never ticks or unticks.
 // - The flag is separate: it survives every transition above.
 
 export const TAGS = ['school', 'calculus3', 'sat', 'pcb', 'photography', 'college', 'other'];
@@ -47,6 +50,8 @@ export function normalizeTask(t) {
     notes: typeof t.notes === 'string' && t.notes !== '' ? t.notes : null,
     done: t.done === true,
     startedAt: typeof t.started === 'string' ? t.started : null,
+    pausedAt: typeof t.paused === 'string' ? t.paused : null,
+    pausedMs: Number.isFinite(t.paused_ms) && t.paused_ms > 0 ? t.paused_ms : 0,
     completedAt: typeof t.completed === 'string' ? t.completed : null,
     flagged: t.flagged === true,
   };
@@ -54,39 +59,56 @@ export function normalizeTask(t) {
 
 export function phase(task) {
   if (task.done) return 'done';
-  return task.startedAt ? 'running' : 'idle';
+  if (!task.startedAt) return 'idle';
+  return task.pausedAt ? 'paused' : 'running';
 }
 
 export const canStart = (task) => phase(task) === 'idle';
-export const canFinish = (task) => phase(task) === 'running';
-export const canStop = (task) => phase(task) === 'running';
+export const canPause = (task) => phase(task) === 'running';
+export const canResume = (task) => phase(task) === 'paused';
+export const canFinish = (task) => phase(task) === 'running' || phase(task) === 'paused';
+export const canStop = (task) => phase(task) === 'running' || phase(task) === 'paused';
 
 /** START: only from idle. Pressing it again while running keeps the first press. */
 export function pressStart(task, nowIso) {
   return phase(task) === 'idle' ? { ...task, startedAt: nowIso } : task;
 }
 
-/** STOP: only while running; forgets the Start press. */
+/** STOP: only while running or paused; forgets the Start press and any pauses. */
 export function pressStop(task) {
-  return phase(task) === 'running' ? { ...task, startedAt: null } : task;
+  return canStop(task) ? { ...task, startedAt: null, pausedAt: null, pausedMs: 0 } : task;
 }
 
-/** FINISH, or ticking the row. Keeps the Start press so the server can work out the real duration. */
-export function tick(task) {
-  return { ...task, done: true };
+/** PAUSE: only while running. Pressing it again changes nothing. */
+export function pressPause(task, nowIso) {
+  return phase(task) === 'running' ? { ...task, pausedAt: nowIso } : task;
+}
+
+const pauseGap = (fromIso, toIso) => Math.max(0, new Date(toIso).getTime() - new Date(fromIso).getTime());
+
+/** RESUME: only while paused; the time paused is added to the total. */
+export function pressResume(task, nowIso) {
+  if (phase(task) !== 'paused') return task;
+  return { ...task, pausedAt: null, pausedMs: task.pausedMs + pauseGap(task.pausedAt, nowIso) };
+}
+
+/** FINISH, or ticking the row. Keeps the Start press so the server can work out the real duration; ends a pause. */
+export function tick(task, nowIso = new Date().toISOString()) {
+  const closed = phase(task) === 'paused' ? pressResume(task, nowIso) : task;
+  return { ...closed, done: true };
 }
 
 /** Unticking starts the task over. */
 export function untick(task) {
-  return { ...task, done: false, startedAt: null };
+  return { ...task, done: false, startedAt: null, pausedAt: null, pausedMs: 0 };
 }
 
 /** How long after an untick a re-tick puts the old Start press and finish time back (an accidental untick). */
 export const UNDO_UNTICK_MS = 10000;
 
-/** What an untick of `task` can undo: its Start press and finish time, stamped with when the untick happened. */
+/** What an untick of `task` can undo: its Start press, finish time and paused time, stamped with when the untick happened. */
 export function undoSnapshot(task, nowMs) {
-  return { startedAt: task.startedAt, completedAt: task.completedAt, at: nowMs };
+  return { startedAt: task.startedAt, completedAt: task.completedAt, pausedMs: task.pausedMs, at: nowMs };
 }
 
 /** The snapshot if it is still fresh enough to restore, else null. */
@@ -214,7 +236,7 @@ export function nextUp(tasks, focusOrder) {
 export function dropAction(task, toTray, focusIds) {
   const from = trayOf(task, focusIds);
   if (toTray === from) return null;
-  const running = phase(task) === 'running';
+  const running = canStop(task); // running or paused
   if (toTray === 'current') return from === 'done' ? 'redo-focus' : running ? null : 'pull';
   if (toTray === 'todo') return from === 'done' ? 'redo' : running ? 'blocked-running' : 'putback';
   if (toTray === 'done') return 'finish';
@@ -238,6 +260,22 @@ export function parseNotes(notes) {
 export function minutesSince(iso, now = Date.now()) {
   const t = new Date(iso).getTime();
   return Number.isNaN(t) ? null : Math.max(0, Math.floor((now - t) / 60000));
+}
+
+/** Minutes actually worked on a started task: since Start, not counting time paused (a pause in progress stops the clock). */
+export function workedMinutes(task, now = Date.now()) {
+  if (!task.startedAt) return null;
+  const began = new Date(task.startedAt).getTime();
+  if (Number.isNaN(began)) return null;
+  const until = task.pausedAt ? new Date(task.pausedAt).getTime() : now;
+  return Math.max(0, Math.floor((until - began - task.pausedMs) / 60000));
+}
+
+/** "12:40pm" for a time on this device, or null. */
+export function clockOf(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return formatClock(`${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`);
 }
 
 /** The server calls. `fetchImpl` is injected so tests can fake the network. */
@@ -286,7 +324,8 @@ export function createApi({ baseUrl, token, fetchImpl, timeoutMs = 15000 }) {
     },
     /** Unticking also clears the Start press, so the task starts over (same as the phone app). */
     setDone: (id, done, restore) =>
-      patch(id, done ? { done: true, ...(restore ? { restoreStarted: restore.startedAt, restoreCompleted: restore.completedAt } : {}) } : { done: false, started: false }),
+      patch(id, done ? { done: true, ...(restore ? { restoreStarted: restore.startedAt, restoreCompleted: restore.completedAt, restorePausedMs: restore.pausedMs } : {}) } : { done: false, started: false }),
+    setPaused: (id, paused) => patch(id, { paused }),
     setStarted: (id, started) => patch(id, { started }),
     setFlagged: (id, flagged) => patch(id, { flagged }),
     async setRating(rating) {

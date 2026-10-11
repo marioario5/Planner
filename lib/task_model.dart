@@ -1,7 +1,7 @@
 enum TaskTag { school, calculus3, sat, pcb, photography, college, other }
 
 /// Where a task is in its life. Every button's behavior follows from this (see [Task]).
-enum TaskPhase { idle, running, done }
+enum TaskPhase { idle, running, paused, done }
 
 /// The planner's day starts at 4:00am, not midnight, because he works past midnight:
 /// 12:30am still belongs to the day that is ending. The server uses the same hour.
@@ -27,8 +27,9 @@ const Duration undoUntickWindow = Duration(seconds: 10);
 class UntickUndo {
   final DateTime? startedAt;
   final DateTime? completedAt;
+  final int pausedMs;
   final DateTime unticked;
-  const UntickUndo({this.startedAt, this.completedAt, required this.unticked});
+  const UntickUndo({this.startedAt, this.completedAt, this.pausedMs = 0, required this.unticked});
 
   /// True while a re-tick at [now] still counts as undoing the untick.
   bool isFresh(DateTime now) => now.difference(unticked) <= undoUntickWindow;
@@ -54,6 +55,12 @@ class Task {
   /// When it was checked off (local time), or null. Only needed to undo an accidental untick.
   DateTime? completedAt;
 
+  /// While he has paused it: when. A paused task is still started, but the time until Resume is not counted.
+  DateTime? pausedAt;
+
+  /// Total milliseconds of finished pauses (taken off the real duration by the server).
+  int pausedMs;
+
   /// He held the flag on it: his start or finish time for this task is wrong,
   /// so the planner must not learn from it.
   bool flagged;
@@ -69,44 +76,72 @@ class Task {
     this.notes,
     this.startedAt,
     this.completedAt,
+    this.pausedAt,
+    this.pausedMs = 0,
     this.flagged = false,
   });
 
   // ── What the buttons do ────────────────────────────────────────────────────
   //
-  //   phase    visible controls               tap START     tap FINISH / row    tap STOP   untick
-  //   idle     START                          -> running    -> done (no timer)  -         -
-  //   running  FINISH + stop (under flag)     -             -> done             -> idle    -
-  //   done     (just "started 4:20pm")        -             -                   -          -> idle
+  //   phase    visible controls                   START      PAUSE      RESUME     FINISH / row         STOP     untick
+  //   idle     START                              -> running -          -          -> done (no timer)   -        -
+  //   running  PAUSE + FINISH + stop (by flag)    -          -> paused  -          -> done              -> idle  -
+  //   paused   RESUME + FINISH + stop (by flag)   -          -          -> running -> done (pause ends) -> idle  -
+  //   done     (just "started 4:20pm")            -          -          -          -                    -        -> idle
   //
   // - Ticking the row is the same as FINISH, and works from idle (a tick with no Start press has no
   //   real duration, only the tick time).
-  // - Unticking always starts the task over: the Start press goes with it, so START shows again.
+  // - Unticking always starts the task over: the Start press and pauses go with it, so START shows again.
   //   Ticking it again within 10 seconds undoes that: the old Start press and finish time come back.
-  // - STOP only exists while running. It forgets the Start press; it never ticks or unticks.
+  // - PAUSE records when; the time until RESUME is not counted in the block's real duration. A finished task never pauses.
+  // - STOP only exists while running or paused. It forgets the Start press and any pauses; it never ticks or unticks.
   // - The flag is separate: it survives every transition above.
 
-  TaskPhase get phase =>
-      done ? TaskPhase.done : (startedAt != null ? TaskPhase.running : TaskPhase.idle);
+  TaskPhase get phase {
+    if (done) return TaskPhase.done;
+    if (startedAt == null) return TaskPhase.idle;
+    return pausedAt != null ? TaskPhase.paused : TaskPhase.running;
+  }
 
   bool get canStart => phase == TaskPhase.idle;
-  bool get canFinish => phase == TaskPhase.running;
-  bool get canStop => phase == TaskPhase.running;
+  bool get canPause => phase == TaskPhase.running;
+  bool get canResume => phase == TaskPhase.paused;
+  bool get canFinish => phase == TaskPhase.running || phase == TaskPhase.paused;
+  bool get canStop => phase == TaskPhase.running || phase == TaskPhase.paused;
 
   /// START: only from idle. Pressing it again while running keeps the first press.
   void pressStart(DateTime now) {
     if (phase == TaskPhase.idle) startedAt = now;
   }
 
-  /// STOP: only while running; forgets the Start press.
+  /// STOP: only while running or paused; forgets the Start press and any pauses.
   void pressStop() {
-    if (phase == TaskPhase.running) startedAt = null;
+    if (!canStop) return;
+    startedAt = null;
+    pausedAt = null;
+    pausedMs = 0;
+  }
+
+  /// PAUSE: only while running. Pressing it again changes nothing.
+  void pressPause(DateTime now) {
+    if (phase == TaskPhase.running) pausedAt = now;
+  }
+
+  /// RESUME: only while paused; the time paused is added to the total.
+  void pressResume(DateTime now) {
+    final from = pausedAt;
+    if (from == null || phase != TaskPhase.paused) return;
+    final gap = now.difference(from).inMilliseconds;
+    pausedMs += gap < 0 ? 0 : gap;
+    pausedAt = null;
   }
 
   /// FINISH, or ticking the row. Keeps the Start press so the server can work out the real duration.
   void tick([DateTime? now]) {
+    final at = now ?? DateTime.now();
+    pressResume(at); // finishing a paused task ends the pause
     done = true;
-    completedAt = now ?? DateTime.now();
+    completedAt = at;
   }
 
   /// Unticking starts the task over.
@@ -114,17 +149,21 @@ class Task {
     done = false;
     startedAt = null;
     completedAt = null;
+    pausedAt = null;
+    pausedMs = 0;
   }
 
   /// What an untick right now would throw away.
   UntickUndo undoOfUntick([DateTime? now]) =>
-      UntickUndo(startedAt: startedAt, completedAt: completedAt, unticked: now ?? DateTime.now());
+      UntickUndo(startedAt: startedAt, completedAt: completedAt, pausedMs: pausedMs, unticked: now ?? DateTime.now());
 
   /// Re-ticking within [undoUntickWindow] of an untick: done again with the original Start press and finish time.
   void restore(UntickUndo undo) {
     done = true;
     startedAt = undo.startedAt;
     completedAt = undo.completedAt ?? DateTime.now();
+    pausedAt = null;
+    pausedMs = undo.pausedMs;
   }
 
   /// A tap on the row's checkbox/label.
@@ -152,6 +191,13 @@ class Task {
   /// "4:20pm" for when he pressed Start; null if he hasn't.
   String? get startedLabel {
     final t = startedAt;
+    if (t == null) return null;
+    return formatClock('${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}');
+  }
+
+  /// "12:40pm" for when he paused it; null if it isn't paused.
+  String? get pausedLabel {
+    final t = pausedAt;
     if (t == null) return null;
     return formatClock('${t.hour.toString().padLeft(2, '0')}:${t.minute.toString().padLeft(2, '0')}');
   }

@@ -24,6 +24,8 @@ final t0 = DateTime(2026, 10, 8, 16, 20);
 Finder get start => find.text('START');
 Finder get finish => find.text('FINISH');
 Finder get stop => find.byIcon(Icons.stop);
+Finder get pause => find.text('PAUSE');
+Finder get resume => find.text('RESUME');
 
 void main() {
   group('task phases (pure model)', () {
@@ -103,6 +105,69 @@ void main() {
       final later = t0.add(const Duration(hours: 2));
       t.pressStart(later);
       expect(t.startedAt, later);
+    });
+  });
+
+  group('pause (pure model)', () {
+    final p0 = DateTime(2026, 10, 8, 16, 40);
+    Task running() => newTask(startedAt: t0);
+    Task paused() => running()..pressPause(p0);
+
+    test('which controls each phase allows', () {
+      final rows = <String, (Task, List<bool>)>{
+        // phase: [start, pause, resume, finish, stop]
+        'idle': (newTask(), [true, false, false, false, false]),
+        'running': (running(), [false, true, false, true, true]),
+        'paused': (paused(), [false, false, true, true, true]),
+        'done': (running()..tick(), [false, false, false, false, false]),
+      };
+      rows.forEach((name, row) {
+        final t = row.$1;
+        expect(t.phase.name, name);
+        expect([t.canStart, t.canPause, t.canResume, t.canFinish, t.canStop], row.$2, reason: name);
+      });
+    });
+
+    test('pause only works while running; pressing it twice keeps the first time', () {
+      final idle = newTask()..pressPause(p0);
+      expect(idle.pausedAt, isNull);
+      final t = paused()..pressPause(p0.add(const Duration(minutes: 5)));
+      expect(t.pausedAt, p0);
+      final done = (running()..tick())..pressPause(p0);
+      expect(done.pausedAt, isNull);
+    });
+
+    test('resume adds the time paused; several pauses add up', () {
+      final t = paused()..pressResume(p0.add(const Duration(minutes: 15)));
+      expect([t.phase, t.pausedAt, t.pausedMs], [TaskPhase.running, null, 15 * 60000]);
+      t.pressPause(p0.add(const Duration(minutes: 20)));
+      t.pressResume(p0.add(const Duration(minutes: 25)));
+      expect(t.pausedMs, 20 * 60000);
+      expect((running()..pressResume(p0)).pausedMs, 0); // resume without a pause: nothing
+    });
+
+    test('finishing while paused ends the pause at the finish time', () {
+      final t = paused()..tick(p0.add(const Duration(minutes: 30)));
+      expect([t.done, t.pausedAt, t.pausedMs], [true, null, 30 * 60000]);
+    });
+
+    test('stop and untick start the task over, pauses included', () {
+      final stopped = paused()..pressStop();
+      expect([stopped.phase, stopped.startedAt, stopped.pausedAt, stopped.pausedMs], [TaskPhase.idle, null, null, 0]);
+      final t = (paused()..pressResume(p0.add(const Duration(minutes: 5))))..tick();
+      expect(t.pausedMs, 5 * 60000);
+      t.untick();
+      expect([t.startedAt, t.pausedAt, t.pausedMs], [null, null, 0]);
+    });
+
+    test('an undone untick brings back the paused time too', () {
+      final t = (paused()..pressResume(p0.add(const Duration(minutes: 15))))..tick(p0.add(const Duration(minutes: 30)));
+      final unticks = <String, UntickUndo>{};
+      final now = DateTime(2026, 10, 8, 18, 0);
+      t.toggleWithUndo(unticks, now);
+      expect(t.pausedMs, 0);
+      t.toggleWithUndo(unticks, now.add(const Duration(seconds: 4)));
+      expect([t.done, t.startedAt, t.pausedMs], [true, t0, 15 * 60000]);
     });
   });
 
@@ -196,6 +261,8 @@ void main() {
               task: task,
               onToggle: () => setState(task.toggleDone),
               onStart: () => setState(() => task.pressStart(DateTime(2026, 10, 8, 16, 20))),
+              onPause: () => setState(() => task.pressPause(DateTime(2026, 10, 8, 16, 40))),
+              onResume: () => setState(() => task.pressResume(DateTime(2026, 10, 8, 16, 55))),
               onResetStart: () => setState(task.pressStop),
               onFlag: () => setState(() => task.flagged = !task.flagged),
               onDelete: () {},
@@ -297,6 +364,74 @@ void main() {
 
       await hold(const Duration(milliseconds: 2100));
       expect(task.flagged, isFalse);
+    });
+
+
+    testWidgets('running: PAUSE appears next to FINISH; paused: RESUME replaces it and the timer says so', (tester) async {
+      final task = await mount(tester, newTask());
+      expect(pause, findsNothing); // idle: nothing to pause
+      await tester.tap(start);
+      await tester.pump();
+      expect([pause.evaluate().length, resume.evaluate().length, finish.evaluate().length], [1, 0, 1]);
+      await tester.tap(pause);
+      await tester.pump();
+      expect(task.phase, TaskPhase.paused);
+      expect([pause.evaluate().length, resume.evaluate().length, finish.evaluate().length, stop.evaluate().length], [0, 1, 1, 1]);
+      expect(find.textContaining('paused '), findsOneWidget);
+      await tester.tap(resume);
+      await tester.pump();
+      expect(task.phase, TaskPhase.running);
+      expect(task.pausedMs, 15 * 60000);
+      expect([pause.evaluate().length, resume.evaluate().length], [1, 0]);
+      expect(task.done, isFalse); // pausing and resuming never tick the task
+    });
+
+    testWidgets('finishing a paused task works and ends the pause; no pause controls after', (tester) async {
+      final task = await mount(tester, newTask(startedAt: t0));
+      await tester.tap(pause);
+      await tester.pump();
+      await tester.tap(finish);
+      await tester.pump();
+      expect(task.done, isTrue);
+      expect(task.pausedAt, isNull);
+      expect([pause.evaluate().length, resume.evaluate().length, finish.evaluate().length, stop.evaluate().length], [0, 0, 0, 0]);
+    });
+
+    testWidgets('stop from paused: back to START with no pause left', (tester) async {
+      final task = await mount(tester, newTask(startedAt: t0));
+      await tester.tap(pause);
+      await tester.pump();
+      await tester.tap(stop);
+      await tester.pump();
+      expect([task.phase, task.pausedAt, task.pausedMs], [TaskPhase.idle, null, 0]);
+      expect([start.evaluate().length, pause.evaluate().length, resume.evaluate().length], [1, 0, 0]);
+    });
+
+    testWidgets('unticking a task that had pauses: START again, no pause or resume', (tester) async {
+      final task = await mount(tester, newTask(startedAt: t0));
+      await tester.tap(pause);
+      await tester.pump();
+      await tester.tap(resume);
+      await tester.pump();
+      await tester.tap(finish);
+      await tester.pump();
+      await tester.tap(find.text('Calc 3 practice')); // untick
+      await tester.pump();
+      expect([task.done, task.startedAt, task.pausedMs], [false, null, 0]);
+      expect([start.evaluate().length, pause.evaluate().length, resume.evaluate().length], [1, 0, 0]);
+    });
+
+    testWidgets('PAUSE and RESUME have big tap areas: a miss 10 px below still hits', (tester) async {
+      final task = await mount(tester, newTask(startedAt: t0));
+      final r = tester.getRect(pause);
+      await tester.tapAt(Offset(r.center.dx, r.bottom + 10));
+      await tester.pump();
+      expect(task.phase, TaskPhase.paused);
+      final r2 = tester.getRect(resume);
+      await tester.tapAt(Offset(r2.center.dx, r2.bottom + 10));
+      await tester.pump();
+      expect(task.phase, TaskPhase.running);
+      expect(task.done, isFalse);
     });
 
     testWidgets('the flag does not block START, and survives start/finish/untick', (tester) async {

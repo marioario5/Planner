@@ -187,7 +187,7 @@ export function actualMinutes(t: Task, timeZone: string, bulk?: Set<string>): nu
   const done = completedMinutes(t, timeZone, bulk);
   const began = startedMinutes(t, timeZone);
   if (done === null || began === null) return null;
-  const took = done - began;
+  const took = done - began - Math.round((t.pausedMs ?? 0) / 60_000); // time paused does not count
   return took > 0 && took <= 720 ? took : null;
 }
 

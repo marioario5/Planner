@@ -507,6 +507,8 @@ const view = (t: Task, timeZone: string, bulk?: Set<string>, together?: Map<stri
   // How long the block really took (Start to tick) and how long after its planned start he began. Null unless trustworthy.
   actual_min: actualMinutes(t, timeZone, bulk),
   start_delay_min: startDelayMinutes(t, timeZone),
+  // Minutes he spent paused (already taken off `actual_min`), and whether it is paused right now. Absent if he never paused it.
+  ...(t.pausedMs > 0 || t.pausedAt ? { paused_min: Math.round(t.pausedMs / 60_000), ...(t.pausedAt ? { paused_now: true } : {}) } : {}),
   // He held the flag on it: his start or finish time for this block is unreliable, so no timing is reported for it.
   flagged: isFlagged(t),
 });
@@ -920,6 +922,7 @@ async function history(args: Json, ctx: McpContext): Promise<Json> {
         started: startedMinutes(t, timeZone) === null ? null : localTime(t.startedAt!, timeZone),
         actual_min: actualMinutes(t, timeZone, bulk),
         start_delay_min: startDelayMinutes(t, timeZone),
+        ...(t.pausedMs > 0 || t.pausedAt ? { paused_min: Math.round(t.pausedMs / 60_000) } : {}),
         flagged: isFlagged(t),
       })),
     };

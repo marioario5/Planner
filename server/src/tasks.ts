@@ -30,6 +30,10 @@ export interface Task {
   completedAt: string | null;
   /** When he pressed Start on it (ISO), or null. Together with `completedAt` it gives the real time the block took. */
   startedAt: string | null;
+  /** While he has paused it: when (ISO), else null. A paused task is still started, but the time since is not counted. */
+  pausedAt: string | null;
+  /** Total milliseconds of finished pauses. Taken off the real duration (`actualMinutes`). */
+  pausedMs: number;
   /** When he flagged it (ISO), or null: "my start or finish time for this one is wrong". Flagged tasks never feed a timing figure. */
   flaggedAt: string | null;
 }
@@ -55,11 +59,15 @@ export interface TaskPatch {
   done?: boolean;
   /** true = he pressed Start (keeps the first press); false = clear it. */
   started?: boolean;
+  /** true = pause the timer (only while it is running); false = resume. Finishing a paused task ends the pause. */
+  paused?: boolean;
   /** true = flag the task's times as unreliable; false = unflag. */
   flagged?: boolean;
   /** Only with done: true. Puts back the Start press and finish time from before an accidental untick. */
   restoreStarted?: string | null;
   restoreCompleted?: string | null;
+  /** Milliseconds of pauses to put back with the above. */
+  restorePausedMs?: number;
 }
 
 /** A titled block of text Claude writes for the day (warnings, pre-start, next PCB work...); each is a button in the app. */
@@ -341,11 +349,15 @@ export function parsePatch(value: unknown): TaskPatch {
   if (typeof value !== 'object' || value === null) {
     throw new ValidationError('patch must be an object');
   }
-  const { title, tag, done, start, minutes, notes, siteKey, started, flagged } = value as Record<string, unknown>;
+  const { title, tag, done, start, minutes, notes, siteKey, started, flagged, paused } = value as Record<string, unknown>;
   const patch: TaskPatch = {};
   if (started !== undefined) {
     if (typeof started !== 'boolean') throw new ValidationError('started must be true or false');
     patch.started = started;
+  }
+  if (paused !== undefined) {
+    if (typeof paused !== 'boolean') throw new ValidationError('paused must be true or false');
+    patch.paused = paused;
   }
   if (flagged !== undefined) {
     if (typeof flagged !== 'boolean') throw new ValidationError('flagged must be true or false');
@@ -361,20 +373,26 @@ export function parsePatch(value: unknown): TaskPatch {
     if (typeof done !== 'boolean') throw new ValidationError('done must be true or false');
     patch.done = done;
   }
-  const { restoreStarted, restoreCompleted } = value as Record<string, unknown>;
+  const { restoreStarted, restoreCompleted, restorePausedMs } = value as Record<string, unknown>;
   const iso = (v: unknown, name: string): string => {
     if (typeof v !== 'string' || Number.isNaN(Date.parse(v))) {
       throw new ValidationError(`${name} must be an ISO time`);
     }
     return new Date(v).toISOString();
   };
-  if (restoreStarted !== undefined || restoreCompleted !== undefined) {
+  if (restoreStarted !== undefined || restoreCompleted !== undefined || restorePausedMs !== undefined) {
     if (patch.done !== true) throw new ValidationError('restoreStarted/restoreCompleted only go with done: true');
     if (restoreStarted !== undefined && restoreStarted !== null) patch.restoreStarted = iso(restoreStarted, 'restoreStarted');
     if (restoreCompleted !== undefined && restoreCompleted !== null) patch.restoreCompleted = iso(restoreCompleted, 'restoreCompleted');
+    if (restorePausedMs !== undefined && restorePausedMs !== null) {
+      if (typeof restorePausedMs !== 'number' || !Number.isInteger(restorePausedMs) || restorePausedMs < 0) {
+        throw new ValidationError('restorePausedMs must be a whole number of milliseconds');
+      }
+      patch.restorePausedMs = restorePausedMs;
+    }
   }
   if (Object.keys(patch).length === 0) {
-    throw new ValidationError('nothing to update: pass title, tag, start, minutes, notes, siteKey, done, started, or flagged');
+    throw new ValidationError('nothing to update: pass title, tag, start, minutes, notes, siteKey, done, started, paused, or flagged');
   }
   return patch;
 }
@@ -448,4 +466,35 @@ export function parseId(value: unknown): string {
 
 export function normalizeTitle(title: string): string {
   return title.trim().toLowerCase();
+}
+
+/**
+ * The pause state a task ends up in after `patch`, so every store applies the same rules:
+ *  - Stop (`started: false`) or an untick starts the task over: no pause, nothing paused.
+ *  - `paused: true` only works on a started, unfinished, not-yet-paused task and notes when; a second press changes nothing.
+ *  - `paused: false` (resume) adds the time since the pause to the total.
+ *  - Finishing a paused task ends the pause at the finish time. A re-tick that restores an accidental untick can put the
+ *    old total back (`restorePausedMs`).
+ */
+export function nextPause(
+  cur: Pick<Task, 'done' | 'startedAt' | 'pausedAt' | 'pausedMs'>,
+  patch: TaskPatch,
+  nowIso: string,
+): { pausedAt: string | null; pausedMs: number } {
+  if (patch.started === false || patch.done === false) return { pausedAt: null, pausedMs: 0 };
+  let { pausedAt, pausedMs } = cur;
+  const gap = (from: string, to: string) => Math.max(0, Date.parse(to) - Date.parse(from));
+  if (patch.paused === true && cur.startedAt && !cur.done && !pausedAt) pausedAt = nowIso;
+  else if (patch.paused === false && pausedAt) {
+    pausedMs += gap(pausedAt, nowIso);
+    pausedAt = null;
+  }
+  if (patch.done === true) {
+    if (pausedAt) {
+      pausedMs += gap(pausedAt, patch.restoreCompleted ?? nowIso);
+      pausedAt = null;
+    }
+    if (patch.restorePausedMs !== undefined) pausedMs = patch.restorePausedMs;
+  }
+  return { pausedAt, pausedMs };
 }

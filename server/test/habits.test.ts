@@ -45,6 +45,8 @@ function task(s: Spec): Task {
     createdAt: iso(s.date, '12:00'),
     completedAt: tick ? iso(s.date, tick[0], tick[1]) : null,
     startedAt: s.began ? iso(s.date, s.began) : null,
+    pausedAt: null,
+    pausedMs: 0,
     flaggedAt: s.flagged ? iso(s.date, '23:00') : null,
   };
 }

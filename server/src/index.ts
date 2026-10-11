@@ -61,6 +61,9 @@ const apiView = (t: Task) => ({
   done: t.done,
   /** ISO time he pressed Start, or null. */
   started: t.startedAt,
+  /** ISO time he paused it (while paused), else null; `paused_ms` is the total already spent paused. */
+  paused: t.pausedAt,
+  paused_ms: t.pausedMs,
   /** ISO time it was checked off, or null; lets a client undo an accidental untick. */
   completed: t.done ? t.completedAt : null,
   /** He held the flag on it: its times are unreliable. */

@@ -252,12 +252,14 @@
     delete undos[id];
     if (undo) {
       // ticked again right after an accidental untick: keep the original Start press and finish time
-      act(id, function (t) { return Object.assign({}, tick(t), { startedAt: undo.startedAt, completedAt: undo.completedAt }); },
+      act(id, function (t) { return Object.assign({}, tick(t), { startedAt: undo.startedAt, completedAt: undo.completedAt, pausedAt: null, pausedMs: undo.pausedMs || 0 }); },
         function () { return api.setDone(id, true, undo); });
       return;
     }
     act(id, tick, function () { return api.setDone(id, true); });
   }
+  function pauseTask(id) { act(id, function (t) { return pressPause(t, new Date().toISOString()); }, function () { return api.setPaused(id, true); }); }
+  function resumeTask(id) { act(id, function (t) { return pressResume(t, new Date().toISOString()); }, function () { return api.setPaused(id, false); }); }
   function stopTask(id) { addFocus(id); act(id, pressStop, function () { return api.setStarted(id, false); }); }
   function redoTask(id, focus) {
     removeFocus(id);
@@ -318,9 +320,10 @@
   }
 
   function elapsedText(task) {
-    var s = startedLabel(task);
-    var m = minutesSince(task.startedAt);
-    return 'since ' + s + (m === null ? '' : ' · ' + m + 'm');
+    var m = workedMinutes(task);
+    var worked = m === null ? '' : ' · ' + m + 'm';
+    if (task.pausedAt) return 'paused ' + (clockOf(task.pausedAt) || '') + worked;
+    return 'since ' + startedLabel(task) + worked;
   }
 
   function slip(task, tray, next) {
@@ -337,10 +340,13 @@
       controls.push(
         h('button', { class: 'go', style: 'border-color:' + color + ';color:' + color, onclick: function (e) { e.stopPropagation(); startTask(task.id); } }, 'START'),
         h('button', { class: 'mini', onclick: function (e) { e.stopPropagation(); putBack(task.id); } }, '< BACK'));
-    } else if (tray === 'current' && ph === 'running') {
+    } else if (tray === 'current' && (ph === 'running' || ph === 'paused')) {
       controls.push(
         h('button', { class: 'go fin', style: 'border-color:' + color + ';background:' + color, onclick: function (e) { e.stopPropagation(); finishTask(task.id); } }, 'FINISH'),
-        h('span', { class: 'elapsed', 'data-since': task.startedAt }, elapsedText(task)));
+        ph === 'running'
+          ? h('button', { class: 'go pausebtn', style: 'border-color:' + color + ';color:' + color, onclick: function (e) { e.stopPropagation(); pauseTask(task.id); } }, 'PAUSE')
+          : h('button', { class: 'go pausebtn resume', style: 'border-color:' + color + ';color:' + color, onclick: function (e) { e.stopPropagation(); resumeTask(task.id); } }, 'RESUME'),
+        h('span', { class: 'elapsed', 'data-timer': task.id }, elapsedText(task)));
     } else if (tray === 'done' && open) {
       controls.push(h('button', { class: 'mini', onclick: function (e) { e.stopPropagation(); redoTask(task.id, false); } }, 'REDO'));
     }
@@ -602,10 +608,9 @@
 
   // the running timers count up by themselves
   setInterval(function () {
-    document.querySelectorAll('.elapsed[data-since]').forEach(function (el) {
-      var m = minutesSince(el.getAttribute('data-since'));
-      var task = state.tasks.find(function (t) { return t.startedAt === el.getAttribute('data-since'); });
-      if (task && m !== null) el.textContent = elapsedText(task);
+    document.querySelectorAll('.elapsed[data-timer]').forEach(function (el) {
+      var task = byId(el.getAttribute('data-timer'));
+      if (task && task.startedAt) el.textContent = elapsedText(task);
     });
   }, 15000);
 

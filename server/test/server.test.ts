@@ -1314,6 +1314,8 @@ describe('rest api for the app', () => {
         notes: null,
         done: false,
         started: null,
+        paused: null,
+        paused_ms: 0,
         completed: null,
         flagged: false,
         position: 0,
@@ -1436,6 +1438,115 @@ describe('start button, flag and day rating (app API)', () => {
     const id = await makeTask();
     expect((await patch(id, { restoreStarted: '2026-10-02T01:00:00.000Z' })).status).toBe(400);
     expect((await patch(id, { done: true, restoreCompleted: 'noon' })).status).toBe(400);
+  });
+
+  describe('pause button', () => {
+    const listed = async () => (await tool('list_tasks', {})).data.tasks[0];
+
+    it('time spent paused is taken off the real duration', async () => {
+      const id = await makeTask();
+      store.clock = () => at(16, 0);
+      await patch(id, { started: true });
+      store.clock = () => at(16, 20);
+      const paused = await patch(id, { paused: true });
+      expect(paused.data).toMatchObject({ paused: '2026-10-01T23:20:00.000Z', paused_ms: 0 });
+      store.clock = () => at(16, 35);
+      expect((await patch(id, { paused: false })).data).toMatchObject({ paused: null, paused_ms: 15 * 60_000 });
+      store.clock = () => at(17, 0);
+      await patch(id, { done: true });
+      expect(await listed()).toMatchObject({ started: '16:00', completed: '17:00', actual_min: 45, paused_min: 15 });
+    });
+
+    it('finishing while paused ends the pause at the finish time', async () => {
+      const id = await makeTask();
+      store.clock = () => at(16, 0);
+      await patch(id, { started: true });
+      store.clock = () => at(16, 30);
+      await patch(id, { paused: true });
+      store.clock = () => at(17, 0);
+      const done = await patch(id, { done: true });
+      expect(done.data).toMatchObject({ paused: null, paused_ms: 30 * 60_000 });
+      expect(await listed()).toMatchObject({ actual_min: 30, paused_min: 30 });
+    });
+
+    it('several pauses add up', async () => {
+      const id = await makeTask();
+      store.clock = () => at(16, 0);
+      await patch(id, { started: true });
+      for (const [from, to] of [[10, 15], [30, 40]]) {
+        store.clock = () => at(16, from);
+        await patch(id, { paused: true });
+        store.clock = () => at(16, to);
+        await patch(id, { paused: false });
+      }
+      expect((await patch(id, { paused: false })).data.paused_ms).toBe(15 * 60_000); // resume again: nothing more
+    });
+
+    it('pause only works on a started, unfinished task, and repeating a press changes nothing', async () => {
+      const id = await makeTask();
+      store.clock = () => at(16, 0);
+      expect((await patch(id, { paused: true })).data).toMatchObject({ paused: null }); // not started
+      await patch(id, { started: true });
+      store.clock = () => at(16, 10);
+      await patch(id, { paused: true });
+      store.clock = () => at(16, 20);
+      expect((await patch(id, { paused: true })).data.paused).toBe('2026-10-01T23:10:00.000Z'); // the first press stands
+      await patch(id, { done: true });
+      store.clock = () => at(17, 0);
+      expect((await patch(id, { paused: true })).data.paused).toBeNull(); // finished: nothing to pause
+    });
+
+    it('Stop and untick start the task over: no pause, no paused time', async () => {
+      const id = await makeTask();
+      store.clock = () => at(16, 0);
+      await patch(id, { started: true });
+      store.clock = () => at(16, 10);
+      await patch(id, { paused: true });
+      store.clock = () => at(16, 20);
+      await patch(id, { paused: false });
+      expect((await patch(id, { started: false })).data).toMatchObject({ started: null, paused: null, paused_ms: 0 });
+
+      store.clock = () => at(17, 0);
+      await patch(id, { started: true });
+      store.clock = () => at(17, 5);
+      await patch(id, { paused: true });
+      await patch(id, { done: true });
+      expect((await patch(id, { done: false })).data).toMatchObject({ started: null, paused: null, paused_ms: 0 });
+    });
+
+    it('an immediate re-tick can put the pauses back with the Start press and finish time', async () => {
+      const id = await makeTask();
+      store.clock = () => at(16, 0);
+      await patch(id, { started: true });
+      store.clock = () => at(16, 10);
+      await patch(id, { paused: true });
+      store.clock = () => at(16, 25);
+      await patch(id, { paused: false });
+      store.clock = () => at(17, 0);
+      const first = (await patch(id, { done: true })).data;
+      await patch(id, { done: false, started: false });
+      store.clock = () => at(17, 3);
+      const back = (await patch(id, { done: true, restoreStarted: first.started, restoreCompleted: first.completed, restorePausedMs: first.paused_ms })).data;
+      expect(back).toMatchObject({ started: first.started, completed: first.completed, paused_ms: 15 * 60_000 });
+    });
+
+    it('a re-publish of the day keeps a paused task paused', async () => {
+      const id = await makeTask();
+      store.clock = () => at(16, 0);
+      await patch(id, { started: true });
+      store.clock = () => at(16, 10);
+      await patch(id, { paused: true });
+      await tool('set_daily_plan', { tasks: [{ title: 'Calc', start: '16:00', minutes: 40, tag: 'calculus3' }] });
+      const task = (((await (await call('/api/tasks')).json()) as any).tasks as any[])[0];
+      expect(task).toMatchObject({ paused: '2026-10-01T23:10:00.000Z' });
+    });
+
+    it('rejects a non-boolean paused, and restore fields that do not belong', async () => {
+      const id = await makeTask();
+      expect((await patch(id, { paused: 'yes' })).status).toBe(400);
+      expect((await patch(id, { restorePausedMs: 5 })).status).toBe(400); // needs done: true
+      expect((await patch(id, { done: true, restorePausedMs: -1 })).status).toBe(400);
+    });
   });
 
   it('rejects a non-boolean started or flagged', async () => {

@@ -1,4 +1,5 @@
 import {
+  nextPause,
   normalizeTitle,
   type Commitment,
   type CommitmentWork,
@@ -52,7 +53,7 @@ export class MemoryTaskStore implements TaskStore {
 
   async add(date: string, plan: Plan, task: NewTask): Promise<Task> {
     const position = this.tasks.filter((t) => t.date === date && t.plan === plan).length;
-    return this.insert(date, plan, task, position, false, null, null, null);
+    return this.insert(date, plan, task, position, false, null, null, null, null, 0);
   }
 
   async replaceDay(date: string, plan: Plan, tasks: NewTask[]): Promise<Task[]> {
@@ -61,7 +62,7 @@ export class MemoryTaskStore implements TaskStore {
     this.tasks = this.tasks.filter((t) => !(t.date === date && t.plan === plan));
     tasks.forEach((t, i) => {
       const old = previous.get(normalizeTitle(t.title));
-      this.insert(date, plan, t, i, old?.done === true, old?.doneAt ?? null, old?.startedAt ?? null, old?.flaggedAt ?? null);
+      this.insert(date, plan, t, i, old?.done === true, old?.doneAt ?? null, old?.startedAt ?? null, old?.flaggedAt ?? null, old?.pausedAt ?? null, old?.pausedMs ?? 0);
     });
     return (await this.list(date)).filter((t) => t.plan === plan);
   }
@@ -75,6 +76,9 @@ export class MemoryTaskStore implements TaskStore {
     if (patch.minutes !== undefined) task.minutes = patch.minutes;
     if (patch.notes !== undefined) task.notes = patch.notes;
     if (patch.siteKey !== undefined) task.siteKey = patch.siteKey;
+    const pause = nextPause(task, patch, new Date(this.clock()).toISOString());
+    task.pausedAt = pause.pausedAt;
+    task.pausedMs = pause.pausedMs;
     if (patch.started !== undefined) {
       task.startedAt = patch.started ? (task.startedAt ?? new Date(this.clock()).toISOString()) : null;
     }
@@ -112,7 +116,11 @@ export class MemoryTaskStore implements TaskStore {
     task.done = done;
     task.doneAt = atMs;
     task.completedAt = done ? new Date(atMs).toISOString() : null;
-    if (!done) task.startedAt = null;
+    if (!done) {
+      task.startedAt = null;
+      task.pausedAt = null;
+      task.pausedMs = 0;
+    }
   }
 
   async listUserNotes(): Promise<UserNote[]> {
@@ -219,6 +227,8 @@ export class MemoryTaskStore implements TaskStore {
     doneAt: number | null,
     startedAt: string | null,
     flaggedAt: string | null,
+    pausedAt: string | null,
+    pausedMs: number,
   ): Task {
     const row: Task = {
       id: `t${++this.seq}`,
@@ -237,6 +247,8 @@ export class MemoryTaskStore implements TaskStore {
       createdAt: new Date().toISOString(),
       completedAt: done ? new Date(doneAt ?? this.clock()).toISOString() : null,
       startedAt,
+      pausedAt,
+      pausedMs,
       flaggedAt,
     };
     this.tasks.push(row);

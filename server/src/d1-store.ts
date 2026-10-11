@@ -19,6 +19,7 @@ import {
   type Task,
   type TaskPatch,
   type TaskStore,
+  nextPause,
 } from './tasks';
 
 interface Row {
@@ -38,6 +39,8 @@ interface Row {
   created_at: string;
   completed_at: string | null;
   started_at: string | null;
+  paused_at: string | null;
+  paused_ms: number | null;
   flagged_at: string | null;
 }
 
@@ -59,6 +62,8 @@ function toTask(row: Row): Task {
     createdAt: row.created_at,
     completedAt: row.completed_at,
     startedAt: row.started_at ?? null,
+    pausedAt: row.paused_at ?? null,
+    pausedMs: row.paused_ms ?? 0,
     flaggedAt: row.flagged_at ?? null,
   };
 }
@@ -66,8 +71,8 @@ function toTask(row: Row): Task {
 const newId = () => crypto.randomUUID().slice(0, 8);
 
 const INSERT = `INSERT INTO tasks
-  (id, date, plan, commitment_id, title, tag, start_time, minutes, notes, site_key, done, done_at, position, created_at, completed_at, started_at, flagged_at)
-  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
+  (id, date, plan, commitment_id, title, tag, start_time, minutes, notes, site_key, done, done_at, position, created_at, completed_at, started_at, flagged_at, paused_at, paused_ms)
+  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`;
 
 export class D1TaskStore implements TaskStore {
   constructor(private readonly db: D1Database) {}
@@ -123,6 +128,8 @@ export class D1TaskStore implements TaskStore {
         null,
         null,
         null,
+        null,
+        0,
       )
       .run();
     return (await this.get(id))!;
@@ -162,6 +169,8 @@ export class D1TaskStore implements TaskStore {
             done ? (old?.completedAt ?? now) : null,
             old?.startedAt ?? null,
             old?.flaggedAt ?? null,
+            old?.pausedAt ?? null,
+            old?.pausedMs ?? 0,
           ),
       );
     });
@@ -223,6 +232,19 @@ export class D1TaskStore implements TaskStore {
         sets.push('flagged_at = NULL');
       }
     }
+    if (patch.paused !== undefined || patch.restorePausedMs !== undefined || patch.done !== undefined || patch.started === false) {
+      const cur = await this.get(id);
+      if (!cur) return null;
+      const next = nextPause(cur, patch, new Date().toISOString());
+      if (next.pausedAt !== cur.pausedAt) {
+        sets.push('paused_at = ?');
+        values.push(next.pausedAt);
+      }
+      if (next.pausedMs !== cur.pausedMs) {
+        sets.push('paused_ms = ?');
+        values.push(next.pausedMs);
+      }
+    }
     if (sets.length === 0) return this.get(id);
 
     const result = await this.db
@@ -240,7 +262,7 @@ export class D1TaskStore implements TaskStore {
 
   async setDoneFromSite(id: string, done: boolean, atMs: number): Promise<void> {
     await this.db
-      .prepare(`UPDATE tasks SET done = ?, done_at = ?, completed_at = ?${done ? '' : ', started_at = NULL'} WHERE id = ?`)
+      .prepare(`UPDATE tasks SET done = ?, done_at = ?, completed_at = ?${done ? '' : ', started_at = NULL, paused_at = NULL, paused_ms = 0'} WHERE id = ?`)
       .bind(done ? 1 : 0, atMs, done ? new Date(atMs).toISOString() : null, id)
       .run();
   }

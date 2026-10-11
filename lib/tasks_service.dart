@@ -108,6 +108,8 @@ class TasksService {
                 // Both absent on a server that predates the Start button and flag.
                 startedAt: DateTime.tryParse((t['started'] as String?) ?? '')?.toLocal(),
                 completedAt: DateTime.tryParse((t['completed'] as String?) ?? '')?.toLocal(),
+                pausedAt: DateTime.tryParse((t['paused'] as String?) ?? '')?.toLocal(),
+                pausedMs: (t['paused_ms'] as int?) ?? 0,
                 flagged: (t['flagged'] as bool?) ?? false,
               ))
           .toList();
@@ -161,11 +163,16 @@ class TasksService {
         if (!completed) 'started': false,
         if (completed && restore?.startedAt != null) 'restoreStarted': restore!.startedAt!.toUtc().toIso8601String(),
         if (completed && restore?.completedAt != null) 'restoreCompleted': restore!.completedAt!.toUtc().toIso8601String(),
+        if (completed && restore != null) 'restorePausedMs': restore.pausedMs,
       });
 
   /// Records (or clears) the moment he pressed Start. The server keeps the first press.
   static Future<bool> setTaskStarted(Task task, bool started) =>
       _patchTask(task, {'started': started});
+
+  /// Pauses (or resumes) a started task. Time paused is not counted in how long the block took.
+  static Future<bool> setTaskPaused(Task task, bool paused) =>
+      _patchTask(task, {'paused': paused});
 
   /// Flags (or unflags) a task whose start or finish time is wrong.
   static Future<bool> setTaskFlagged(Task task, bool flagged) =>

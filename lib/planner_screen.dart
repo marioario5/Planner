@@ -234,6 +234,8 @@ class _PlannerScreenState extends State<PlannerScreen>
     final wasDone = task.done;
     final startedBefore = task.startedAt;
     final completedBefore = task.completedAt;
+    final pausedBefore = task.pausedAt;
+    final pausedMsBefore = task.pausedMs;
 
     // Ticking again within 10 seconds of an untick undoes it: the original Start press and finish time come back.
     UntickUndo? restore;
@@ -247,6 +249,8 @@ class _PlannerScreenState extends State<PlannerScreen>
         task.done = wasDone;
         task.startedAt = startedBefore;
         task.completedAt = completedBefore;
+        task.pausedAt = pausedBefore;
+        task.pausedMs = pausedMsBefore;
         _error = "Couldn't sync that change";
       });
     }
@@ -265,15 +269,48 @@ class _PlannerScreenState extends State<PlannerScreen>
     }
   }
 
+  /// PAUSE: records when, so time away from the task isn't counted.
+  Future<void> _pauseTask(Task task) async {
+    HapticFeedback.mediumImpact();
+    setState(() => task.pressPause(DateTime.now()));
+    final ok = await TasksService.setTaskPaused(task, true);
+    if (!ok && mounted) {
+      setState(() {
+        task.pausedAt = null;
+        _error = "Couldn't sync that change";
+      });
+    }
+  }
+
+  /// RESUME: the time since PAUSE is added to the paused total.
+  Future<void> _resumeTask(Task task) async {
+    HapticFeedback.mediumImpact();
+    final pausedBefore = task.pausedAt;
+    final msBefore = task.pausedMs;
+    setState(() => task.pressResume(DateTime.now()));
+    final ok = await TasksService.setTaskPaused(task, false);
+    if (!ok && mounted) {
+      setState(() {
+        task.pausedAt = pausedBefore;
+        task.pausedMs = msBefore;
+        _error = "Couldn't sync that change";
+      });
+    }
+  }
+
   /// The stop/reset button under the flag: forgets the Start press (an accidental Start, or a start he doesn't trust).
   Future<void> _resetStart(Task task) async {
     HapticFeedback.mediumImpact();
     final before = task.startedAt;
+    final pausedBefore = task.pausedAt;
+    final msBefore = task.pausedMs;
     setState(task.pressStop);
     final ok = await TasksService.setTaskStarted(task, false);
     if (!ok && mounted) {
       setState(() {
         task.startedAt = before;
+        task.pausedAt = pausedBefore;
+        task.pausedMs = msBefore;
         _error = "Couldn't sync that change";
       });
     }
@@ -728,6 +765,8 @@ class _PlannerScreenState extends State<PlannerScreen>
             task: t,
             onToggle: () => _toggleTask(t),
             onStart: () => _startTask(t),
+            onPause: () => _pauseTask(t),
+            onResume: () => _resumeTask(t),
             onResetStart: () => _resetStart(t),
             onFlag: () => _toggleFlag(t),
             onDelete: () => _deleteTask(t),
@@ -984,6 +1023,8 @@ class TaskRow extends StatefulWidget {
   final Task task;
   final VoidCallback onToggle;
   final VoidCallback onStart;
+  final VoidCallback onPause;
+  final VoidCallback onResume;
   final VoidCallback onResetStart;
   final VoidCallback onFlag;
   final VoidCallback onDelete;
@@ -992,6 +1033,8 @@ class TaskRow extends StatefulWidget {
     required this.task,
     required this.onToggle,
     required this.onStart,
+    required this.onPause,
+    required this.onResume,
     required this.onResetStart,
     required this.onFlag,
     required this.onDelete,
@@ -1045,6 +1088,7 @@ class _TaskRowState extends State<TaskRow> with SingleTickerProviderStateMixin {
       );
     }
     final started = task.canFinish;
+    final paused = task.canResume;
     final color = tagColor(task.tag);
     return Padding(
       padding: EdgeInsets.zero,
@@ -1067,8 +1111,23 @@ class _TaskRowState extends State<TaskRow> with SingleTickerProviderStateMixin {
           ),
         ),
         if (started) ...[
-          const SizedBox(width: 6),
-          Text('since ${task.startedLabel}',
+          GestureDetector(
+            behavior: HitTestBehavior.opaque,
+            onTap: paused ? widget.onResume : widget.onPause,
+            child: Padding(
+              padding: const EdgeInsets.fromLTRB(0, 10, 10, 10),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+                decoration: BoxDecoration(
+                  color: cPaper,
+                  border: Border.all(color: color, width: 2),
+                ),
+                child: Text(paused ? 'RESUME' : 'PAUSE',
+                    style: _px(5, color, height: 1.2, letterSpacing: 0.5)),
+              ),
+            ),
+          ),
+          Text(paused ? 'paused ${task.pausedLabel}' : 'since ${task.startedLabel}',
               style: _px(5, cInkLight, height: 1.2)),
         ],
       ]),

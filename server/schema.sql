@@ -17,7 +17,9 @@ CREATE TABLE IF NOT EXISTS tasks (
   created_at   TEXT NOT NULL,
   completed_at TEXT,
   started_at   TEXT,                          -- when he pressed Start
-  flagged_at   TEXT                           -- he flagged this task's times as unreliable
+  flagged_at   TEXT,                          -- he flagged this task's times as unreliable
+  paused_at    TEXT,                          -- while paused: when he paused it
+  paused_ms    INTEGER NOT NULL DEFAULT 0     -- total time already spent paused
 );
 
 CREATE INDEX IF NOT EXISTS idx_tasks_date ON tasks (date, position);
