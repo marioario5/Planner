@@ -92,3 +92,12 @@ CREATE TABLE IF NOT EXISTS experiments (
   result     TEXT,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS task_events (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  at      TEXT NOT NULL,
+  task_id TEXT,
+  title   TEXT,
+  source  TEXT NOT NULL,
+  change  TEXT NOT NULL
+);

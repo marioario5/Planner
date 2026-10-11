@@ -86,6 +86,7 @@ describe('site -> planner', () => {
     site.siteSets('calc3-t6', true, 5_000_000); // he ticks it on the progress site while it is paused
     let task = (await rest())[0];
     expect(task).toMatchObject({ done: true, paused: null, paused_ms: 3_000_000 });
+    expect(store.events.map((e) => e.source)).toContain('progress-site sync'); // and the change log says where it came from
     store.clock = () => 9_000_000;
     await patch(id, { paused: false }); // a stale Resume arrives from the phone afterwards
     task = (await rest())[0];

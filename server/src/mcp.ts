@@ -214,6 +214,21 @@ const TOOLS = [
     annotations: { readOnlyHint: true },
   },
   {
+    name: 'get_task_log',
+    description:
+      'The most recent changes to tasks, newest first, each with when, which task, what sent it (website, phone app, progress-site sync, ' +
+      'or the planner tool) and what it asked for. For tracing a task that changed unexpectedly (done, started or paused when he did not do it). ' +
+      'Optional `task` keeps only events whose task title contains that text.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        limit: { type: 'integer', minimum: 1, maximum: 200, description: 'How many events. Default 40.' },
+        task: { type: 'string', maxLength: 100, description: 'Only events for tasks whose title contains this (case-insensitive).' },
+      },
+    },
+    annotations: { readOnlyHint: true },
+  },
+  {
     name: 'get_habits',
     description:
       'How he actually works. `stats` are computed from his check-offs over the last `days` finished days (default 28): ' +
@@ -481,6 +496,10 @@ export interface McpContext {
 }
 
 type Json = Record<string, unknown>;
+
+/** YYYY-MM-DD of an ISO time in the planner time zone. */
+const localDate = (iso: string, timeZone: string): string =>
+  new Intl.DateTimeFormat('en-CA', { timeZone, year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date(iso));
 
 const view = (t: Task, timeZone: string, bulk?: Set<string>, together?: Map<string, Task>, slot?: Map<string, number>) => ({
   id: t.id,
@@ -945,6 +964,7 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
       checkSiteKeys(parsed.map((t) => t.siteKey), ctx);
       await checkCommitments(parsed.map((t) => t.commitment), ctx);
       await store.replaceDay(date, plan, parsed);
+      await store.logEvent({ taskId: null, title: null, source: 'planner tool (Claude)', change: JSON.stringify({ published: `plan ${plan}`, date, tasks: parsed.length }) });
       const all = await store.list(date);
       await reconcile(store, all, ctx.sync); // a lesson already ticked on the site arrives ticked
       const published = summarize(date, plan, all.filter((t) => t.plan === plan), timeZone);
@@ -974,6 +994,22 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
     }
     case 'get_history':
       return history(args, ctx);
+    case 'get_task_log': {
+      const limit = typeof args.limit === 'number' ? Math.min(200, Math.max(1, Math.floor(args.limit))) : 40;
+      const filter = typeof args.task === 'string' ? args.task.trim().toLowerCase() : '';
+      const events = (await store.listEvents(filter ? 500 : limit))
+        .filter((ev) => !filter || (ev.title ?? '').toLowerCase().includes(filter))
+        .slice(0, limit);
+      return {
+        events: events.map((ev) => ({
+          at: `${localDate(ev.at, timeZone)} ${localTime(ev.at, timeZone)}`,
+          task: ev.title,
+          task_id: ev.taskId,
+          source: ev.source,
+          change: ev.change,
+        })),
+      };
+    }
     case 'get_habits':
       return habits(args, ctx);
     case 'get_framework':
@@ -1045,6 +1081,7 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
 
       let task = await store.update(id, patch);
       if (!task) throw new ValidationError(`no task with id ${id}`);
+      await store.logEvent({ taskId: id, title: task.title, source: 'planner tool (Claude)', change: JSON.stringify(args) });
       if (finishedAtMs !== null) {
         await store.setCompletedAt(id, finishedAtMs);
         task = (await store.get(id)) ?? task;

@@ -138,13 +138,14 @@ describe('mcp protocol', () => {
     expect(await res.text()).toBe('');
   });
 
-  it('lists the sixteen tools with schemas', async () => {
+  it('lists the seventeen tools with schemas', async () => {
     const { body } = await rpc('tools/list');
     expect(body.result.tools.map((t: any) => t.name)).toEqual([
       'set_daily_plan',
       'set_day_info',
       'list_tasks',
       'get_history',
+      'get_task_log',
       'get_habits',
       'set_habits',
       'set_experiments',
@@ -1572,6 +1573,36 @@ describe('start button, flag and day rating (app API)', () => {
       expect((await patch(id, { paused: 'yes' })).status).toBe(400);
       expect((await patch(id, { restorePausedMs: 5 })).status).toBe(400); // needs done: true
       expect((await patch(id, { done: true, restorePausedMs: -1 })).status).toBe(400);
+    });
+  });
+
+  describe('task change log', () => {
+    const log = async (args: object = {}) => (await tool('get_task_log', args)).data.events as any[];
+
+    it('records who sent each change: phone app, website, planner tool', async () => {
+      const id = await makeTask();
+      store.clock = () => at(16, 20);
+      await call(`/api/tasks/${id}`, { method: 'PATCH', headers: { 'User-Agent': 'Dart/3.8 (dart:io)' }, body: JSON.stringify({ started: true }) });
+      store.clock = () => at(16, 30);
+      await call(`/api/tasks/${id}`, { method: 'PATCH', headers: { Origin: 'https://marioario5.github.io' }, body: JSON.stringify({ done: true }) });
+      store.clock = () => at(16, 40);
+      await tool('update_task', { id, done: false });
+      const events = await log();
+      expect(events.map((e) => [e.source, e.task])).toEqual([
+        ['planner tool (Claude)', 'Calc'],
+        ['website (marioario5.github.io)', 'Calc'],
+        ['phone app', 'Calc'],
+        ['planner tool (Claude)', null], // the plan itself being published
+      ]);
+      expect(events[1]).toMatchObject({ at: '2026-10-01 16:30', change: '{"done":true}' });
+      expect(JSON.parse(events[0].change)).toMatchObject({ id, done: false });
+    });
+
+    it('filters by task title and caps the count', async () => {
+      await makeTask();
+      expect(await log({ task: 'nothing like it' })).toEqual([]);
+      expect((await log({ task: 'calc' })).length).toBe(0); // only the publish, which has no task title
+      expect((await log({ limit: 1 })).length).toBe(1);
     });
   });
 

@@ -1,4 +1,6 @@
 import {
+  TASK_EVENTS_KEPT,
+  type TaskEvent,
   closePauseAt,
   nextPause,
   normalizeTitle,
@@ -109,6 +111,18 @@ export class MemoryTaskStore implements TaskStore {
   async setCompletedAt(id: string, atMs: number): Promise<void> {
     const task = this.tasks.find((t) => t.id === id);
     if (task?.done) task.completedAt = new Date(atMs).toISOString();
+  }
+
+  events: TaskEvent[] = [];
+  private eventSeq = 0;
+
+  async logEvent(e: Omit<TaskEvent, 'id' | 'at'>): Promise<void> {
+    this.events.unshift({ ...e, id: ++this.eventSeq, at: new Date(this.clock()).toISOString() });
+    this.events = this.events.slice(0, TASK_EVENTS_KEPT);
+  }
+
+  async listEvents(limit: number): Promise<TaskEvent[]> {
+    return this.events.slice(0, limit);
   }
 
   async setDoneFromSite(id: string, done: boolean, atMs: number): Promise<void> {

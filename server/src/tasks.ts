@@ -38,6 +38,20 @@ export interface Task {
   flaggedAt: string | null;
 }
 
+/** One change to a task, kept briefly so an unexpected change can be traced to what sent it. */
+export interface TaskEvent {
+  id: number;
+  at: string; // ISO
+  taskId: string | null;
+  title: string | null;
+  /** Who sent it: "website", "phone app", "progress-site sync", "planner tool"... */
+  source: string;
+  /** What was asked, as JSON text. */
+  change: string;
+}
+
+export const TASK_EVENTS_KEPT = 500;
+
 export interface NewTask {
   title: string;
   tag: Tag;
@@ -200,6 +214,10 @@ export interface TaskStore {
   get(id: string): Promise<Task | null>;
   /** Records when a task was really finished, without changing when it was ticked (which drives site sync). */
   setCompletedAt(id: string, atMs: number): Promise<void>;
+  /** Notes one change to a task (the newest 500 are kept). Never throws: logging must not break the change itself. */
+  logEvent(e: Omit<TaskEvent, 'id' | 'at'>): Promise<void>;
+  /** Newest first. */
+  listEvents(limit: number): Promise<TaskEvent[]>;
   /** Applies a check-off that came from the progress site, keeping the site's timestamp. */
   setDoneFromSite(id: string, done: boolean, atMs: number): Promise<void>;
   listUserNotes(): Promise<UserNote[]>;

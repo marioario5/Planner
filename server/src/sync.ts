@@ -90,6 +90,7 @@ async function applyToAll(store: TaskStore, group: Task[], done: boolean, atMs: 
   for (const t of group) {
     if (t.done === done && t.doneAt === atMs) continue;
     await store.setDoneFromSite(t.id, done, atMs);
+    await store.logEvent({ taskId: t.id, title: t.title, source: 'progress-site sync', change: JSON.stringify({ done, at: new Date(atMs).toISOString() }) });
     t.done = done;
     t.doneAt = atMs;
     t.completedAt = done ? new Date(atMs).toISOString() : null;

@@ -177,6 +177,7 @@ async function handleInner(
       if (patch.siteKey !== undefined) throw new ValidationError('siteKey can only be set through MCP');
       const task = await store.update(id, patch);
       if (!task) return json({ error: 'no such task' }, 404);
+      await store.logEvent({ taskId: id, title: task.title, source: sourceOf(request), change: JSON.stringify(body) });
       if (patch.done !== undefined) await reconcile(store, [task], sync); // mirror the tick to the site
       return json(apiView(task));
     }
@@ -189,6 +190,15 @@ async function handleInner(
     console.error('request failed', err);
     return json({ error: 'internal error' }, 500);
   }
+}
+
+/** Where a REST change came from: the website sends an Origin header, the phone app's HTTP client says Dart. */
+export function sourceOf(request: Request): string {
+  const origin = request.headers.get('Origin');
+  if (origin) return `website (${origin.replace(/^https?:\/\//, '')})`;
+  const ua = request.headers.get('User-Agent') ?? '';
+  if (/dart/i.test(ua)) return 'phone app';
+  return ua ? `other (${ua.slice(0, 40)})` : 'unknown';
 }
 
 function syncFromEnv(env: Env): SyncConfig | undefined {

@@ -14,6 +14,8 @@ import {
   type HabitNotes,
   type HabitVersion,
   type NewTask,
+  type TaskEvent,
+  TASK_EVENTS_KEPT,
   type Plan,
   type Tag,
   type Task,
@@ -259,6 +261,33 @@ export class D1TaskStore implements TaskStore {
   async remove(id: string): Promise<boolean> {
     const result = await this.db.prepare('DELETE FROM tasks WHERE id = ?').bind(id).run();
     return result.meta.changes > 0;
+  }
+
+  async logEvent(e: Omit<TaskEvent, 'id' | 'at'>): Promise<void> {
+    try {
+      await this.db
+        .prepare('INSERT INTO task_events (at, task_id, title, source, change) VALUES (?, ?, ?, ?, ?)')
+        .bind(new Date().toISOString(), e.taskId, e.title, e.source, e.change)
+        .run();
+      await this.db
+        .prepare('DELETE FROM task_events WHERE id <= (SELECT MAX(id) FROM task_events) - ?')
+        .bind(TASK_EVENTS_KEPT)
+        .run();
+    } catch (err) {
+      console.error('could not log a task change', err); // e.g. the table is not migrated yet
+    }
+  }
+
+  async listEvents(limit: number): Promise<TaskEvent[]> {
+    try {
+      const { results } = await this.db
+        .prepare('SELECT id, at, task_id, title, source, change FROM task_events ORDER BY id DESC LIMIT ?')
+        .bind(limit)
+        .all<{ id: number; at: string; task_id: string | null; title: string | null; source: string; change: string }>();
+      return results.map((r) => ({ id: r.id, at: r.at, taskId: r.task_id, title: r.title, source: r.source, change: r.change }));
+    } catch {
+      return []; // table not migrated yet
+    }
   }
 
   async setDoneFromSite(id: string, done: boolean, atMs: number): Promise<void> {
