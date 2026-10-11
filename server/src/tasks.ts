@@ -510,7 +510,7 @@ export function nextPause(
   }
   let { pausedAt, pausedMs } = cur;
   // A finished task has nothing to pause or resume (its pause ended when it was finished): a late Resume changes nothing.
-  if (cur.done && patch.done !== true) return { pausedAt, pausedMs };
+  if (cur.done && patch.done !== true) return { pausedAt, pausedMs: patch.pausedMsSet ?? pausedMs }; // (a hand fix may still correct the total)
   const gap = (from: string, to: string) => Math.max(0, Date.parse(to) - Date.parse(from));
   if (patch.paused === true && cur.startedAt && !cur.done && (!pausedAt || patch.pausedAtIso)) pausedAt = patch.pausedAtIso ?? nowIso;
   else if (patch.paused === false && pausedAt) {
