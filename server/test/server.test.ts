@@ -138,7 +138,7 @@ describe('mcp protocol', () => {
     expect(await res.text()).toBe('');
   });
 
-  it('lists the nineteen tools with schemas', async () => {
+  it('lists the twenty tools with schemas', async () => {
     const { body } = await rpc('tools/list');
     expect(body.result.tools.map((t: any) => t.name)).toEqual([
       'set_daily_plan',
@@ -147,6 +147,7 @@ describe('mcp protocol', () => {
       'get_history',
       'get_server_status',
       'get_site_progress',
+      'get_gym_sessions',
       'get_task_log',
       'get_habits',
       'set_habits',

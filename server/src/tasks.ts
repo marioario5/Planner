@@ -38,6 +38,13 @@ export interface Task {
   flaggedAt: string | null;
 }
 
+/** One stretch at the gym, from the phone app's gym switch. */
+export interface GymSession {
+  id: string;
+  startedAt: string; // ISO
+  endedAt: string | null; // null while he is still there
+}
+
 /** One change to a task, kept briefly so an unexpected change can be traced to what sent it. */
 export interface TaskEvent {
   id: number;
@@ -225,6 +232,10 @@ export interface TaskStore {
   logEvent(e: Omit<TaskEvent, 'id' | 'at'>): Promise<void>;
   /** Newest first. */
   listEvents(limit: number): Promise<TaskEvent[]>;
+  /** Creates or updates a session by id. A null end never erases an end that is already saved, so a late retry is harmless. */
+  saveGym(s: GymSession): Promise<void>;
+  /** Sessions that started at or after `fromIso`, oldest first. */
+  listGym(fromIso: string): Promise<GymSession[]>;
   /** Applies a check-off that came from the progress site, keeping the site's timestamp. */
   setDoneFromSite(id: string, done: boolean, atMs: number): Promise<void>;
   listUserNotes(): Promise<UserNote[]>;
@@ -474,6 +485,21 @@ export function parseHabitNotes(value: unknown): string {
     throw new ValidationError(`notes must be at most ${MAX_HABIT_NOTES} characters (got ${text.length}); tighten them`);
   }
   return text;
+}
+
+/** Body of PUT /api/gym/:id: `started` (ISO time) and optionally `ended` (ISO time, or null while he is still there). */
+export function parseGym(id: string, body: unknown): GymSession {
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new ValidationError('gym session id must be 1 to 64 letters, digits, - or _');
+  const r = (body ?? {}) as Record<string, unknown>;
+  const iso = (v: unknown, what: string): string => {
+    const ms = typeof v === 'string' ? Date.parse(v) : NaN;
+    if (Number.isNaN(ms)) throw new ValidationError(`${what} must be an ISO time such as 2026-10-11T18:30:00Z`);
+    return new Date(ms).toISOString();
+  };
+  const startedAt = iso(r.started, 'started');
+  const endedAt = r.ended === undefined || r.ended === null ? null : iso(r.ended, 'ended');
+  if (endedAt !== null && endedAt < startedAt) throw new ValidationError('ended is before started');
+  return { id, startedAt, endedAt };
 }
 
 export function parseRating(value: unknown): number | null {

@@ -7,6 +7,8 @@ import 'dart:convert';
 import 'task_model.dart';
 import 'printer_painter.dart';
 import 'tasks_service.dart';
+import 'gym_tracker.dart';
+import 'dart:async';
 
 const Color cPaper       = Color(0xFFFFF8EE);
 const Color cPaperShadow = Color(0xFFEDE0CC);
@@ -133,7 +135,10 @@ class PlannerScreen extends StatefulWidget {
 }
 
 class _PlannerScreenState extends State<PlannerScreen>
-    with TickerProviderStateMixin {
+    with TickerProviderStateMixin, WidgetsBindingObserver {
+
+  final GymTracker _gym = GymTracker(send: TasksService.putGym);
+  Timer? _gymTimer; // once a minute: refresh the elapsed time and retry anything unsent
 
   late AnimationController _lightController;
   late AnimationController _feedController;
@@ -169,15 +174,73 @@ class _PlannerScreenState extends State<PlannerScreen>
     );
 
     // Pick up the saved server address and token on launch
-    _loadConnection();
+    WidgetsBinding.instance.addObserver(this);
+    _startUp();
+    _gymTimer = Timer.periodic(const Duration(minutes: 1), (_) async {
+      await _gym.flush();
+      if (mounted) setState(() {});
+    });
     _loadVibe();
     _loadTicks();
+  }
+
+  Future<void> _startUp() async {
+    await _loadConnection();
+    await _gym.load();
+    if (mounted) setState(() {});
+    await _gym.flush(); // anything recorded while offline last time
+    if (mounted) setState(() {});
   }
 
   Future<void> _loadConnection() async {
     await TasksService.load();
     if (mounted) setState(() {});
   }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      _gym.flush().then((_) {
+        if (mounted) setState(() {});
+      });
+    }
+  }
+
+  Future<void> _toggleGym() async {
+    HapticFeedback.mediumImpact();
+    final done = _gym.toggle();
+    setState(() {}); // the switch flips at once, before anything is sent
+    await done;
+    if (mounted) setState(() {});
+  }
+
+  String get _gymLabel {
+    final since = _gym.since;
+    final waiting = _gym.unsynced > 0 ? ' · WAITING FOR WIFI' : '';
+    if (since == null) return '[ GYM: START ]$waiting';
+    final mins = DateTime.now().difference(since).inMinutes;
+    final clock = '${mins ~/ 60}:${(mins % 60).toString().padLeft(2, '0')}';
+    return '[ AT GYM $clock · STOP ]$waiting';
+  }
+
+  Widget _gymButton() => Padding(
+        padding: const EdgeInsets.only(bottom: 10),
+        child: GestureDetector(
+          key: const Key('gym-switch'),
+          behavior: HitTestBehavior.opaque,
+          onTap: _toggleGym,
+          child: Container(
+            width: double.infinity,
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            decoration: BoxDecoration(
+              color: _gym.atGym ? cRose : cPaper,
+              border: Border.all(color: cInk, width: 2),
+            ),
+            child: Text(_gymLabel,
+                textAlign: TextAlign.center, style: _px(6, cInk, letterSpacing: 0.5, height: 1.4)),
+          ),
+        ),
+      );
 
   Future<void> _loadVibe() async {
     final prefs = await SharedPreferences.getInstance();
@@ -204,6 +267,8 @@ class _PlannerScreenState extends State<PlannerScreen>
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _gymTimer?.cancel();
     _lightController.dispose();
     _feedController.dispose();
     super.dispose();
@@ -593,6 +658,7 @@ class _PlannerScreenState extends State<PlannerScreen>
                 const SizedBox(height: 8),
               ],
               _sectionButtons(),
+              _gymButton(),
               _loading
                 ? Center(
                     child: Text('fetching tasks...',

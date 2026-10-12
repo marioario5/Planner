@@ -247,3 +247,8 @@ echo "API_TOKEN=dev-token-0123456789abcdef" > .dev.vars   # gitignored
 npm run db:init:local     # new local db; `db:migrate:local` upgrades an old one
 npm run dev              # http://localhost:8787
 ```
+
+
+## Gym switch
+
+The phone app has a gym switch (start/stop). It records the time on the phone first and sends it when there is a connection (`PUT /api/gym/:id` with `{started, ended?}`; the app makes the id, so a retry never duplicates a session). The planner reads it with `get_gym_sessions`. Needs migration `0012_gym_sessions` (`npm run db:gym:remote`); `get_server_status` lists it if missing.

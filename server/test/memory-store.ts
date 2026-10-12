@@ -1,6 +1,7 @@
 import { SCHEMA_OK, type SchemaReport } from '../src/schema-check';
 import {
   TASK_EVENTS_KEPT,
+  type GymSession,
   type TaskEvent,
   closePauseAt,
   nextPause,
@@ -131,6 +132,20 @@ export class MemoryTaskStore implements TaskStore {
 
   async listEvents(limit: number): Promise<TaskEvent[]> {
     return this.events.slice(0, limit);
+  }
+
+  gym: GymSession[] = [];
+
+  async saveGym(s: GymSession): Promise<void> {
+    const cur = this.gym.find((g) => g.id === s.id);
+    if (cur) {
+      cur.startedAt = s.startedAt;
+      cur.endedAt = s.endedAt ?? cur.endedAt;
+    } else this.gym.push({ ...s });
+  }
+
+  async listGym(fromIso: string): Promise<GymSession[]> {
+    return this.gym.filter((g) => g.startedAt >= fromIso).sort((a, b) => a.startedAt.localeCompare(b.startedAt));
   }
 
   async setDoneFromSite(id: string, done: boolean, atMs: number): Promise<void> {

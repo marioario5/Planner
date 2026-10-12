@@ -240,6 +240,14 @@ const TOOLS = [
     annotations: { readOnlyHint: true },
   },
   {
+    name: 'get_gym_sessions',
+    description:
+      "Time he spent at the gym, from the switch on his phone app (it works offline and syncs later). Each session has local date, start, end and minutes; `open: true` means he is there now or forgot to switch it off. " +
+      "It is real, deliberate time away from the desk: never read it as wasted time or as a gap in his work, and don't plan work over it. Optional `days` (default 14, max 60) looks back from today.",
+    inputSchema: { type: 'object', properties: { days: { type: 'integer', minimum: 1, maximum: 60 } } },
+    annotations: { readOnlyHint: true },
+  },
+  {
     name: 'get_task_log',
     description:
       'The most recent changes to tasks, newest first, each with when, which task, what sent it (website, phone app, progress-site sync, ' +
@@ -1084,6 +1092,21 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
     }
     case 'get_site_progress':
       return siteProgress(args, ctx);
+    case 'get_gym_sessions': {
+      const days = typeof args.days === 'number' ? Math.min(60, Math.max(1, Math.floor(args.days))) : 14;
+      const from = shiftDate(plannerToday(timeZone, now), -days);
+      const sessions = await store.listGym(new Date(plannerTimeToEpoch(from, '00:00', timeZone)).toISOString());
+      return {
+        window_days: days,
+        sessions: sessions.map((g) => ({
+          date: localDate(g.startedAt, timeZone),
+          start: localTime(g.startedAt, timeZone),
+          end: g.endedAt ? localTime(g.endedAt, timeZone) : null,
+          minutes: g.endedAt ? Math.round((Date.parse(g.endedAt) - Date.parse(g.startedAt)) / 60000) : null,
+          open: g.endedAt === null,
+        })),
+      };
+    }
     case 'get_task_log': {
       const limit = typeof args.limit === 'number' ? Math.min(200, Math.max(1, Math.floor(args.limit))) : 40;
       const filter = typeof args.task === 'string' ? args.task.trim().toLowerCase() : '';

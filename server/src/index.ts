@@ -4,7 +4,7 @@ import { resolveDate } from './dates';
 import { FirebaseSite } from './firebase';
 import { handleMcpPost } from './mcp';
 import { parsePrefixes, reconcile, type SyncConfig } from './sync';
-import { ValidationError, parsePatch, parseRating, type Task, type TaskStore } from './tasks';
+import { ValidationError, parseGym, parsePatch, parseRating, type Task, type TaskStore } from './tasks';
 
 export interface Env {
   DB: D1Database;
@@ -28,7 +28,7 @@ function allowedOrigins(env: Pick<Env, 'ALLOWED_ORIGINS'>): string[] {
     .filter(Boolean);
 }
 
-const isApiPath = (path: string) => path === '/api/rating' || path === '/api/tasks' || path.startsWith('/api/tasks/');
+const isApiPath = (path: string) => path === '/api/rating' || path.startsWith('/api/gym/') || path === '/api/tasks' || path.startsWith('/api/tasks/');
 
 /**
  * Lets the planner website (a different origin) call the app API. Only origins on the allow list get CORS headers, so
@@ -77,6 +77,7 @@ const apiView = (t: Task) => ({
  *   POST   /mcp/<token>    MCP endpoint for clients that can't send headers (claude.ai connectors)
  *   GET    /api/tasks?date=YYYY-MM-DD
  *   PATCH  /api/tasks/:id  {done?, started?, paused?, flagged?, title?, tag?, start?, minutes?, notes?, restoreStarted?, restoreCompleted?, restorePausedMs?}
+ *   PUT    /api/gym/:id    {started, ended?}  gym switch (idempotent; the id is made by the app)
  *   PUT    /api/rating     {date?, rating: 1-5 | null}  how the day felt
  *   DELETE /api/tasks/:id
  */
@@ -119,7 +120,7 @@ async function handleInner(
   if (path === '/') return new Response('cozy-planner ok\n');
 
   const isMcp = path === '/mcp' || path.startsWith('/mcp/');
-  const isApi = path === '/api/tasks' || path.startsWith('/api/tasks/') || path === '/api/rating';
+  const isApi = path === '/api/tasks' || path.startsWith('/api/tasks/') || path === '/api/rating' || path.startsWith('/api/gym/');
   if (!isMcp && !isApi) return json({ error: 'not found' }, 404);
 
   if (!tokenConfigured(env.API_TOKEN)) {
@@ -141,6 +142,16 @@ async function handleInner(
     }
 
     if (!(await bearerMatches(request, env.API_TOKEN))) return unauthorized();
+
+    if (path.startsWith('/api/gym/')) {
+      if (request.method !== 'PUT') return json({ error: 'method not allowed' }, 405);
+      const body = await request.json().catch(() => {
+        throw new ValidationError('body must be JSON');
+      });
+      const session = parseGym(decodeURIComponent(path.slice('/api/gym/'.length)), body);
+      await store.saveGym(session);
+      return json(session);
+    }
 
     if (path === '/api/rating') {
       if (request.method !== 'PUT') return json({ error: 'method not allowed' }, 405);

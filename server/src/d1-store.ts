@@ -15,6 +15,7 @@ import {
   type HabitNotes,
   type HabitVersion,
   type NewTask,
+  type GymSession,
   type TaskEvent,
   TASK_EVENTS_KEPT,
   type Plan,
@@ -296,6 +297,29 @@ export class D1TaskStore implements TaskStore {
         .bind(limit)
         .all<{ id: number; at: string; task_id: string | null; title: string | null; source: string; change: string }>();
       return results.map((r) => ({ id: r.id, at: r.at, taskId: r.task_id, title: r.title, source: r.source, change: r.change }));
+    } catch {
+      return []; // table not migrated yet
+    }
+  }
+
+  async saveGym(s: GymSession): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO gym_sessions (id, started_at, ended_at, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET started_at = excluded.started_at,
+           ended_at = COALESCE(excluded.ended_at, gym_sessions.ended_at), updated_at = excluded.updated_at`,
+      )
+      .bind(s.id, s.startedAt, s.endedAt, new Date().toISOString())
+      .run();
+  }
+
+  async listGym(fromIso: string): Promise<GymSession[]> {
+    try {
+      const { results } = await this.db
+        .prepare('SELECT id, started_at, ended_at FROM gym_sessions WHERE started_at >= ? ORDER BY started_at')
+        .bind(fromIso)
+        .all<{ id: string; started_at: string; ended_at: string | null }>();
+      return results.map((r) => ({ id: r.id, startedAt: r.started_at, endedAt: r.ended_at }));
     } catch {
       return []; // table not migrated yet
     }

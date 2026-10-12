@@ -178,6 +178,28 @@ class TasksService {
   static Future<bool> setTaskFlagged(Task task, bool flagged) =>
       _patchTask(task, {'flagged': flagged});
 
+  /// Sends one gym session (the server keeps it by [id], so sending twice is harmless). True once the server has it.
+  static Future<bool> putGym(String id, DateTime started, DateTime? ended) async {
+    if (!isConfigured) return false;
+
+    try {
+      final res = await http
+          .put(
+            Uri.parse('$_baseUrl/api/gym/${Uri.encodeComponent(id)}'),
+            headers: _headers,
+            body: jsonEncode({
+              'started': started.toUtc().toIso8601String(),
+              'ended': ended?.toUtc().toIso8601String(),
+            }),
+          )
+          .timeout(_timeout);
+      return res.statusCode == 200;
+    } catch (e) {
+      debugPrint('Gym send error: $e');
+      return false;
+    }
+  }
+
   /// How today felt, 1 to 5; null clears it.
   static Future<bool> setRating(int? rating) async {
     if (!isConfigured) return false;

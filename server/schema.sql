@@ -101,3 +101,10 @@ CREATE TABLE IF NOT EXISTS task_events (
   source  TEXT NOT NULL,
   change  TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS gym_sessions (
+  id         TEXT PRIMARY KEY,
+  started_at TEXT NOT NULL,
+  ended_at   TEXT,
+  updated_at TEXT NOT NULL
+);
