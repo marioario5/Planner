@@ -148,18 +148,6 @@
   function addFocus(id) { if (state.focus.indexOf(id) < 0) { state.focus.push(id); saveFocus(); } }
   function removeFocus(id) { var i = state.focus.indexOf(id); if (i >= 0) { state.focus.splice(i, 1); saveFocus(); } }
 
-  function vibe() {
-    var list = window.__VIBES || [];
-    var today = new Date().toDateString();
-    try {
-      var saved = JSON.parse(localStorage.getItem('planner-vibe') || 'null');
-      if (saved && saved.d === today) return saved.t;
-    } catch (e) { /* ignore */ }
-    var pick = list.length ? list[Math.floor(Math.random() * list.length)] : 'Matthew 11:29';
-    try { localStorage.setItem('planner-vibe', JSON.stringify({ d: today, t: pick })); } catch (e) { /* ignore */ }
-    return pick;
-  }
-  var todaysVibe = vibe();
 
   // ---- talking to the server ----
   function touch(id, delta) {
@@ -413,7 +401,7 @@
     });
     $('center').replaceChildren(
       tabs,
-      h('div', { class: 'dateline' }, dateLabel(), h('span', { class: 'verse' }, state.date ? '  ·  ' + todaysVibe : '')),
+      h('div', { class: 'dateline' }, dateLabel(), h('span', { class: 'verse' }, state.date ? '  ·  ' + verseFor(state.date, window.__VERSES || []) : '')),
       state.headline ? h('div', { class: 'headline' }, state.headline) : null);
   }
 

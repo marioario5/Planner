@@ -8,6 +8,7 @@ import 'task_model.dart';
 import 'printer_painter.dart';
 import 'tasks_service.dart';
 import 'gym_tracker.dart';
+import 'verse.dart';
 import 'dart:async';
 
 const Color cPaper       = Color(0xFFFFF8EE);
@@ -146,7 +147,7 @@ class _PlannerScreenState extends State<PlannerScreen>
   bool _printed   = false;
   bool _loading   = false;
   String? _error;
-  String _vibe    = 'Matthew 11:29';
+  String _verse   = 'Matthew 11:29';
 
   List<Task> _tasks = [];            // every plan's tasks for today
   String? _headline;
@@ -180,7 +181,7 @@ class _PlannerScreenState extends State<PlannerScreen>
       await _gym.flush();
       if (mounted) setState(() {});
     });
-    _loadVibe();
+    _loadVerse();
     _loadTicks();
   }
 
@@ -242,27 +243,11 @@ class _PlannerScreenState extends State<PlannerScreen>
         ),
       );
 
-  Future<void> _loadVibe() async {
-    final prefs = await SharedPreferences.getInstance();
-    final today = DateTime.now();
-    final todayKey = '${today.year}-${today.month}-${today.day}';
-    final savedDate = prefs.getString('vibe_date');
-    final savedVibe = prefs.getString('vibe_text');
-
-    if (savedDate == todayKey && savedVibe != null) {
-      // Same day — use the saved vibe
-      if (mounted) setState(() => _vibe = savedVibe);
-      return;
-    }
-
-    // New day — pick a fresh one
-    final data = await rootBundle.loadString('assets/vibes.json');
-    final json = jsonDecode(data);
-    final vibes = List<String>.from(json['vibes']);
-    final pick = vibes[Random().nextInt(vibes.length)];
-    await prefs.setString('vibe_date', todayKey);
-    await prefs.setString('vibe_text', pick);
-    if (mounted) setState(() => _vibe = pick);
+  /// Today's verse is chosen from the planner day, so the website shows the same one (see verse.dart).
+  Future<void> _loadVerse() async {
+    final data = await rootBundle.loadString('assets/verses.json');
+    final verses = List<String>.from(jsonDecode(data)['verses']);
+    if (mounted) setState(() => _verse = verseFor(plannerDay(), verses));
   }
 
   @override
@@ -734,7 +719,7 @@ class _PlannerScreenState extends State<PlannerScreen>
                 // Mood
                 Row(mainAxisAlignment: MainAxisAlignment.center, children: [
                   _moodPip(), const SizedBox(width: 6),
-                  Text(_vibe,
+                  Text(_verse,
                       style: GoogleFonts.pressStart2p(
                           fontSize: 5, color: cInkLight, letterSpacing: 0.5)),
                   const SizedBox(width: 6), _moodPip(),

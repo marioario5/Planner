@@ -271,6 +271,20 @@ export function workedMinutes(task, now = Date.now()) {
   return Math.max(0, Math.floor((until - began - task.pausedMs) / 60000));
 }
 
+/**
+ * Today's verse: the same one on the phone app and the website, because both pick from the same list with the same
+ * rule from the same day (the planner day, "YYYY-MM-DD"). lib/verse.dart has the identical rule; keep them in step.
+ */
+export function verseFor(dateKey, list) {
+  if (!list || list.length === 0) return 'Matthew 11:29';
+  let h = 0x811c9dc5; // FNV-1a over the date's characters
+  for (let i = 0; i < dateKey.length; i++) {
+    h ^= dateKey.charCodeAt(i);
+    h = Math.imul(h, 16777619) >>> 0;
+  }
+  return list[h % list.length];
+}
+
 /** "12:40pm" for a time on this device, or null. */
 export function clockOf(iso) {
   const d = new Date(iso);
