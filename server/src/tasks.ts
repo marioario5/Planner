@@ -1,7 +1,7 @@
 // Task types, input validation, and the storage interface.
 // Validation lives here so the REST routes and the MCP tools reject the same things.
 
-export const TAGS = ['school', 'calculus3', 'sat', 'pcb', 'photography', 'college', 'other'] as const;
+export const TAGS = ['school', 'calculus3', 'sat', 'pcb', 'creative', 'college', 'other'] as const;
 export type Tag = (typeof TAGS)[number];
 
 /** A day can have two complete lists: Plan A (the normal day) and Plan B (the backup, e.g. a later start). */
@@ -292,8 +292,14 @@ export function parseTitle(value: unknown): string {
   return title;
 }
 
+/** The creative tag used to be called photography; old rows and old callers still say so. */
+export function normalizeTag(value: string): string {
+  return value === 'photography' ? 'creative' : value;
+}
+
 export function parseTag(value: unknown): Tag {
   if (value === undefined || value === null) return 'school'; // fallback when Claude doesn't pick a tag
+  if (value === 'photography') return 'creative';
   if (typeof value === 'string' && (TAGS as readonly string[]).includes(value)) {
     return value as Tag;
   }

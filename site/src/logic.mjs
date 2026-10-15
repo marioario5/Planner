@@ -14,14 +14,14 @@
 // - STOP only exists while running or paused. It forgets the Start press and any pauses; it never ticks or unticks.
 // - The flag is separate: it survives every transition above.
 
-export const TAGS = ['school', 'calculus3', 'sat', 'pcb', 'photography', 'college', 'other'];
+export const TAGS = ['school', 'calculus3', 'sat', 'pcb', 'creative', 'college', 'other'];
 
 export const TAG_LABEL = {
   school: 'school',
   calculus3: 'calc 3',
   sat: 'sat',
   pcb: 'pcb',
-  photography: 'photo',
+  creative: 'creative',
   college: 'college',
   other: 'other',
 };
@@ -31,7 +31,7 @@ export const TAG_COLOR = {
   calculus3: '#E8A0A0',
   sat: '#9C7BBC',
   pcb: '#6C8EBF',
-  photography: '#8BAF7C',
+  creative: '#8BAF7C',
   college: '#B5838D',
   other: '#A39A8B',
 };

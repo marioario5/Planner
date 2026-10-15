@@ -32,7 +32,7 @@ Color tagColor(TaskTag tag) {
     case TaskTag.calculus3:   return cRose;
     case TaskTag.sat:         return cLavender;
     case TaskTag.pcb:         return cTeal;
-    case TaskTag.photography: return cSage;
+    case TaskTag.creative:    return cSage;
     case TaskTag.college:     return cPlum;
     case TaskTag.other:       return cStone;
   }

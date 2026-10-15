@@ -34,7 +34,7 @@ Claude routine ──MCP──▶  Worker + D1  ◀──REST──  Flutter app
 | `get_task_log` | The most recent changes to tasks (newest first): when, which task, what sent it (website, phone app, progress-site sync, planner tool) and what it asked for. For tracing a task that changed unexpectedly. Needs migration 0011. |
 | `delete_task` | Remove a task. |
 
-`tag` is one of `school`, `calculus3`, `sat`, `pcb`, `photography`, `college`, `other` (the app's colour tags; defaults to `school`).
+`tag` is one of `school`, `calculus3`, `sat`, `pcb`, `creative`, `college`, `other` (the app's colour tags; defaults to `school`).
 Each task can carry a time and detail, so titles stay short:
 
 - `start`: 24-hour `HH:MM` (e.g. `15:30`). Timed tasks are shown in clock order; untimed ones come last, in the order given.

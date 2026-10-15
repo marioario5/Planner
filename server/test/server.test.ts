@@ -237,7 +237,8 @@ describe('mcp tools', () => {
   });
 
   it('adds, updates and deletes single tasks', async () => {
-    const added = await tool('add_task', { title: 'Water plants', tag: 'photography' });
+    const added = await tool('add_task', { title: 'Water plants', tag: 'photography' }); // the old name still works
+    expect(added.data.added.tag).toBe('creative');
     const id = added.data.added.id;
     const updated = await tool('update_task', { id, title: 'Water the cactus', done: true });
     expect(updated.data.updated).toMatchObject({ title: 'Water the cactus', done: true });

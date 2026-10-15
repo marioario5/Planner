@@ -1,4 +1,4 @@
-enum TaskTag { school, calculus3, sat, pcb, photography, college, other }
+enum TaskTag { school, calculus3, sat, pcb, creative, college, other }
 
 /// Where a task is in its life. Every button's behavior follows from this (see [Task]).
 enum TaskPhase { idle, running, paused, done }
@@ -238,7 +238,7 @@ extension TaskTagLabel on TaskTag {
       case TaskTag.calculus3:   return 'calc 3';
       case TaskTag.sat:         return 'sat';
       case TaskTag.pcb:         return 'pcb';
-      case TaskTag.photography: return 'photo';
+      case TaskTag.creative:    return 'creative';
       case TaskTag.college:     return 'college';
       case TaskTag.other:       return 'other';
     }

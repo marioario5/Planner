@@ -1,5 +1,6 @@
 import { checkSchema, type SchemaReport } from './schema-check';
 import {
+  normalizeTag,
   normalizeTitle,
   type Commitment,
   type Experiment,
@@ -56,7 +57,7 @@ function toTask(row: Row): Task {
     plan: row.plan as Plan,
     commitmentId: row.commitment_id,
     title: row.title,
-    tag: row.tag as Tag,
+    tag: normalizeTag(row.tag) as Tag,
     start: row.start_time,
     minutes: row.minutes,
     notes: row.notes,
@@ -524,7 +525,7 @@ export class D1TaskStore implements TaskStore {
       title: r.title,
       change: r.change,
       measure: r.measure as ExperimentMeasure,
-      tag: r.tag as Tag | null,
+      tag: (r.tag === null ? null : normalizeTag(r.tag)) as Tag | null,
       startedOn: r.started_on,
       status: r.status as ExperimentStatus,
       result: r.result,

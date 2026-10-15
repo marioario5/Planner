@@ -140,14 +140,14 @@ describe('what it leaves out', () => {
       task({ date: '2026-10-21', tag: 'pcb' }), // future
       task({ date: '2026-08-01', tag: 'pcb', tick: '16:00' }), // older than 28 days
       // Oct 19: plan A untouched, plan B done -> only B is measured
-      task({ date: '2026-10-19', tag: 'photography', plan: 'A' }),
+      task({ date: '2026-10-19', tag: 'creative', plan: 'A' }),
       task({ date: '2026-10-19', tag: 'calculus3', plan: 'B', tick: '16:00' }),
       task({ date: '2026-10-19', tag: 'calculus3', plan: 'B', tick: '16:30' }),
     ];
     const h = computeHabits(tasks, TZ, TODAY);
     expect(h.window).toEqual({ from: '2026-09-22', through: '2026-10-19', days_with_tasks: 6 });
     expect(h.carry_over.by_tag.pcb).toBeUndefined();
-    expect(h.carry_over.by_tag.photography).toBeUndefined();
+    expect(h.carry_over.by_tag.creative).toBeUndefined();
     expect(h.carry_over.by_tag.calculus3).toBeUndefined(); // only 2 samples
     expect(h.carry_over.overall).toMatchObject({ planned: 7, done_on_day: 7 });
   });
