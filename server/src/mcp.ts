@@ -208,6 +208,7 @@ const TOOLS = [
       'Tasks ticked after their planner day ended are `backfilled` (carried over and finished on a later day, or recorded late): they are listed in `timing.backfilled` and left out of every figure. ' +
       'If a day had both Plan A and Plan B, the day shows the one he followed (the plan with more tasks checked off, A on a tie) ' +
       'and `other_plan` gives the other one\'s totals. ' +
+      '`latest_day_info` is the notes the planner wrote for the most recent earlier day (headline and sections such as "Next PCB work"), so promises made then can be read without any saved plan file. ' +
       'Days with no tasks are left out. Use it to see what slipped and what to carry forward. ' +
       'A task not checked off may still have been done: he has to tick it in the app.',
     inputSchema: {
@@ -1086,7 +1087,15 @@ async function history(args: Json, ctx: McpContext): Promise<Json> {
       })),
     };
   });
-  return { from, through, done, total, days: out };
+  // Yesterday's notes (headline and sections such as "Next PCB work"): this is what the saved plan files used to be read for.
+  let latestInfo: Json | null = null;
+  const today = plannerToday(timeZone, now);
+  for (let back = 1; back <= 7 && latestInfo === null; back++) {
+    const date = shiftDate(today, -back);
+    const info = await store.getDayInfo(date);
+    if (info.headline || info.sections.length > 0) latestInfo = { date, headline: info.headline, sections: info.sections.map((s) => ({ title: s.title, body: s.body })) };
+  }
+  return { from, through, done, total, days: out, latest_day_info: latestInfo };
 }
 
 /** His progress site's state, exactly as stored, shaped for reading (see the get_site_progress tool). */

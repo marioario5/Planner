@@ -52,3 +52,20 @@ describe('gym sessions', () => {
     expect(anon.status).toBe(401);
   });
 });
+
+describe('get_history latest_day_info', () => {
+  it("returns yesterday's notes (such as Next PCB work), and null when there are none", async () => {
+    const store = new MemoryTaskStore();
+    const call = async (name: string, args: any) => {
+      const res = await handleRequest(
+        new Request('https://x/mcp', { method: 'POST', headers: auth, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/call', params: { name, arguments: args } }) }),
+        env, store, now,
+      );
+      return JSON.parse(((await res.json()) as any).result.content[0].text);
+    };
+    expect((await call('get_history', {})).latest_day_info).toBeNull();
+    await call('set_day_info', { date: '2026-10-10', headline: 'Sat', sections: [{ title: 'Next PCB work', body: '- Dr Dish bench Sunday, first step: power check' }] });
+    const h = await call('get_history', {});
+    expect(h.latest_day_info).toEqual({ date: '2026-10-10', headline: 'Sat', sections: [{ title: 'Next PCB work', body: '- Dr Dish bench Sunday, first step: power check' }] });
+  });
+});
