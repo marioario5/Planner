@@ -4,7 +4,19 @@
 
 import { rowsOf } from './firebase';
 import { localTime, plannerToday, plannerTimeToEpoch, resolveDate, shiftDate } from './dates';
-import { MAX_DEFER_DAYS, MAX_OPEN_COMMITMENTS, computeFramework, unaddressed } from './framework';
+import {
+  MAX_DEFER_DAYS,
+  MAX_OPEN_COMMITMENTS,
+  PROTECTED_KEY,
+  computeFramework,
+  computeSlipping,
+  deferHistory,
+  deferRefusal,
+  describeItem,
+  parseProtected,
+  slippingLines,
+  unaddressed,
+} from './framework';
 import { MAX_ACTIVE_NOTES, resolvedToPrune, viewUserNotes } from './user-notes';
 import { DEFAULT_WINDOW_DAYS, MAX_WINDOW_DAYS, computeHabits, evaluateExperiments } from './habits';
 import { DEFAULT_PREFIXES, isSyncable, reconcile, type SyncConfig } from './sync';
@@ -375,6 +387,8 @@ const TOOLS = [
               target_minutes: { type: ['integer', 'null'], minimum: 5, maximum: 6000, description: 'A rough size, not a promise.' },
               status: { type: 'string', enum: [...COMMITMENT_STATUSES] },
               note: { type: ['string', 'null'], maxLength: 300, description: 'Your reasoning and assumptions.' },
+              protected: { type: 'boolean', description: 'true = the planner may never defer it and must give it a small floor block while it is at risk. Anyone can turn it on; turning it off needs his_words.' },
+              his_words: { type: 'string', maxLength: 200, description: 'Only with protected: false: what he said when he asked to unprotect it.' },
             },
             required: ['id'],
           },
@@ -390,13 +404,17 @@ const TOOLS = [
     description:
       `Set a commitment aside ON PURPOSE until a date within ${MAX_DEFER_DAYS} days, with a one-line reason. It won't be flagged until then, ` +
       'and later runs will see your reason. Use it when you decided to leave something out of today\'s plan. ' +
-      'Deferring is a normal, respected choice. Pass until: null to bring it back.',
+      'Deferring is allowed but deliberately hard: a protected item can never be deferred, an item due within a week with nothing done or already overdue can\'t be, ' +
+      'a deferral past the due date can\'t be, the second deferral of an item needs a new reason that says what changed, and the third needs his words. ' +
+      'When one is refused, give the item a small floor block in the plan instead. If he really asked for the deferral, pass his_words (a quote of what he said). ' +
+      'Every deferral shows in the Slipping list at the top of his day. Pass until: null to bring it back.',
     inputSchema: {
       type: 'object',
       properties: {
         id: { type: 'string' },
         until: { type: ['string', 'null'], pattern: '^\\d{4}-\\d{2}-\\d{2}$', description: 'The day it should come back. Null to clear the deferral.' },
         reason: { type: 'string', maxLength: 200 },
+        his_words: { type: 'string', maxLength: 200, description: 'What he said when he asked for this deferral, quoted. Only when he really asked.' },
       },
       required: ['id', 'until'],
     },
@@ -626,10 +644,11 @@ async function loadFramework(ctx: McpContext, includeAll = false) {
   const [commitments, work, log, reviewedOn] = await Promise.all([
     store.listCommitments(),
     store.commitmentWork(),
-    store.listFrameworkLog(10),
+    store.listFrameworkLog(200),
     store.getMeta('framework_reviewed_on'),
   ]);
-  return { today, commitments, framework: computeFramework(commitments, work, log, reviewedOn, today, includeAll) };
+  const protectedIds = parseProtected(await store.getMeta(PROTECTED_KEY));
+  return { today, commitments, work, log, protectedIds, framework: computeFramework(commitments, work, log, reviewedOn, today, includeAll) };
 }
 
 /** A task may only point at a commitment that exists and is still open. */
@@ -646,12 +665,21 @@ async function checkCommitments(ids: (string | null | undefined)[], ctx: McpCont
 
 /** After publishing today's plan: which flagged suggestions did the plan leave out? (Reported, never enforced.) */
 async function frameworkCheck(ctx: McpContext, date: string, todaysTasks: Task[]): Promise<Json | null> {
-  const { today, framework } = await loadFramework(ctx);
+  const { today, framework, commitments, work, log, protectedIds } = await loadFramework(ctx);
   if (date !== today) return null;
   const scheduled = new Set(todaysTasks.map((t) => t.commitmentId).filter((i): i is string => !!i));
   const left = unaddressed(framework, scheduled);
-  if (left.length === 0 && !framework.review_due) return null;
+  const floor = computeSlipping(commitments, work, log, protectedIds, today, scheduled).filter((s) => s.floor_needed && !s.in_todays_plan);
+  if (left.length === 0 && floor.length === 0 && !framework.review_due) return null;
   return {
+    ...(floor.length
+      ? {
+          floor_blocks_missing: floor.map((s) => ({ id: s.id, title: s.title, deferred: s.times_deferred, done_minutes: s.done_minutes })),
+          floor_rule:
+            'These are protected and at risk, and none has a block in this plan. Add a small floor block (15 to 25 minutes) for each, unless he told you not to study today ' +
+            '(illness, injury, a day off), and then say so in Warnings. If the day cannot hold them, name what you are dropping or what he must renegotiate; never quietly push them later.',
+        }
+      : {}),
     ...(left.length ? { not_in_todays_plan: left.map((i) => ({ id: i.id, title: i.title, signals: i.signals })) } : {}),
     ...(framework.review_due ? { review_due: true } : {}),
     hint:
@@ -677,6 +705,8 @@ async function setCommitments(args: Json, ctx: McpContext): Promise<Json> {
   const existing = new Map((await store.listCommitments()).map((c) => [c.id, c]));
   const merged = new Map(existing);
   const changed: { c: Commitment; closed: 'done' | 'dropped' | null; added: boolean }[] = [];
+  const protectedIds = parseProtected(await store.getMeta(PROTECTED_KEY));
+  const protectChanges: { id: string; on: boolean; words: string | null }[] = [];
   for (const raw of args.commitments) {
     if (typeof raw !== 'object' || raw === null) throw new ValidationError('each commitment must be an object with an id');
     const r = raw as Json;
@@ -703,6 +733,21 @@ async function setCommitments(args: Json, ctx: McpContext): Promise<Json> {
       if (r.note !== null && (typeof r.note !== 'string' || r.note.trim().length > 300)) throw new ValidationError(`note for "${id}" must be at most 300 characters`);
       next.note = r.note === null || (r.note as string).trim() === '' ? null : (r.note as string).trim();
     }
+    if (has('protected')) {
+      if (typeof r.protected !== 'boolean') throw new ValidationError(`protected for "${id}" must be true or false`);
+      const isProtected = protectedIds.has(id);
+      if (r.protected && !isProtected) {
+        protectedIds.add(id);
+        protectChanges.push({ id, on: true, words: null });
+      } else if (!r.protected && isProtected) {
+        const words = typeof r.his_words === 'string' ? r.his_words.trim() : '';
+        if (words.length < 8 || words.length > 200) {
+          throw new ValidationError(`"${id}" is protected: only he can unprotect it. Pass his_words with what he said (8 to 200 characters).`);
+        }
+        protectedIds.delete(id);
+        protectChanges.push({ id, on: false, words });
+      }
+    }
     let closed: 'done' | 'dropped' | null = null;
     if (has('status')) {
       if (typeof r.status !== 'string' || !(COMMITMENT_STATUSES as readonly string[]).includes(r.status)) throw new ValidationError(`status for "${id}" must be one of: ${COMMITMENT_STATUSES.join(', ')}`);
@@ -722,6 +767,12 @@ async function setCommitments(args: Json, ctx: McpContext): Promise<Json> {
     throw new ValidationError(`that would leave ${open} open commitments; keep at most ${MAX_OPEN_COMMITMENTS} (drop or finish some, and keep them rough)`);
   }
 
+  if (protectChanges.length > 0) {
+    await store.setMeta(PROTECTED_KEY, JSON.stringify([...protectedIds].sort()));
+    for (const p of protectChanges) {
+      await store.addFrameworkLog({ onDate: today, commitmentId: p.id, action: 'review', detail: p.on ? 'protected' : `unprotected (his words: "${p.words}")` });
+    }
+  }
   for (const { c, closed } of changed) {
     await store.saveCommitment(c);
     if (closed) await store.addFrameworkLog({ onDate: today, commitmentId: c.id, action: closed, detail: c.note ?? c.title });
@@ -756,8 +807,20 @@ async function deferCommitment(args: Json, ctx: McpContext): Promise<Json> {
     throw new ValidationError('give a one-line reason (at most 200 characters) so later runs understand the choice');
   }
   const reason = args.reason.trim();
+  const hisWords = typeof args.his_words === 'string' && args.his_words.trim().length >= 8 ? args.his_words.trim().slice(0, 200) : null;
+  const [work, log, protectedRaw] = await Promise.all([store.commitmentWork(), store.listFrameworkLog(200), store.getMeta(PROTECTED_KEY)]);
+  const refusal = deferRefusal({
+    c,
+    item: describeItem(c, work, today),
+    isProtected: parseProtected(protectedRaw).has(id),
+    history: deferHistory(log).get(id) ?? { n: 0, lastReason: null },
+    until,
+    reason,
+    hisWords,
+  });
+  if (refusal) throw new ValidationError(refusal);
   await store.saveCommitment({ ...c, deferUntil: until, deferReason: reason, updatedAt: stamp });
-  await store.addFrameworkLog({ onDate: today, commitmentId: id, action: 'defer', detail: `until ${until}: ${reason}` });
+  await store.addFrameworkLog({ onDate: today, commitmentId: id, action: 'defer', detail: `until ${until}: ${reason}${hisWords ? ` (his words: "${hisWords}")` : ''}` });
   return { id, deferred_until: until, reason };
 }
 
@@ -1128,8 +1191,11 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
     }
     case 'get_habits':
       return habits(args, ctx);
-    case 'get_framework':
-      return { ...(await loadFramework(ctx, args.all === true)).framework };
+    case 'get_framework': {
+      const f = await loadFramework(ctx, args.all === true);
+      const slipping = computeSlipping(f.commitments, f.work, f.log, f.protectedIds, f.today, new Set());
+      return { ...f.framework, protected: [...f.protectedIds], slipping, slipping_lines: slippingLines(slipping) };
+    }
     case 'set_commitments':
       return setCommitments(args, ctx);
     case 'defer_commitment':

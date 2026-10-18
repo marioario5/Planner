@@ -69,7 +69,7 @@ export interface Framework {
   all_open?: FrameworkItem[];
 }
 
-function describe(c: Commitment, work: CommitmentWork[], today: string): FrameworkItem {
+export function describeItem(c: Commitment, work: CommitmentWork[], today: string): FrameworkItem {
   const mine = work.filter((w) => w.commitmentId === c.id && w.done);
   const done = mine.reduce((sum, w) => sum + (w.minutes ?? 0), 0);
   const lastWorked = mine.length ? mine.map((w) => w.date).sort().at(-1)! : null;
@@ -131,7 +131,7 @@ export function computeFramework(
   today: string,
   includeAll = false,
 ): Framework {
-  const open = commitments.filter((c) => c.status === 'open').map((c) => describe(c, work, today));
+  const open = commitments.filter((c) => c.status === 'open').map((c) => describeItem(c, work, today));
   const deferred = open.filter((i) => i.deferred_until);
   const active = open.filter((i) => !i.deferred_until);
   const worthALook = active.filter((i) => i.signals.length > 0);
@@ -165,6 +165,143 @@ export function computeFramework(
   }
   if (includeAll) framework.all_open = open;
   return framework;
+}
+
+// ---- Deferrals are hard to do and impossible to miss ----
+// A deferral used to be free, silent and repeatable, so an item could slide day after day with nobody noticing. Now:
+//  - protected items (the ones he named: PIQs, SAT...) can't be deferred by the planner at all, only shrunk to a small floor block;
+//  - an item due within a week with nothing done, an overdue one, or a deferral past the due date needs his own words;
+//  - the second deferral needs a new reason, the third needs his words;
+//  - every item that is slipping is listed at the top of the day (the Slipping section) and in get_framework.
+
+/** Where the protected ids live (framework_meta), as a JSON list. */
+export const PROTECTED_KEY = 'protected_commitments';
+export const AT_RISK_DAYS = 7;
+export const MIN_SECOND_REASON = 30;
+
+export function parseProtected(raw: string | null): Set<string> {
+  if (!raw) return new Set();
+  try {
+    const list = JSON.parse(raw);
+    return new Set(Array.isArray(list) ? list.filter((x): x is string => typeof x === 'string') : []);
+  } catch {
+    return new Set();
+  }
+}
+
+export interface DeferHistory {
+  n: number;
+  lastReason: string | null;
+}
+
+/** How many times each commitment has been deferred (from the newest log entries) and the latest reason. `log` is newest first. */
+export function deferHistory(log: FrameworkLogEntry[]): Map<string, DeferHistory> {
+  const out = new Map<string, DeferHistory>();
+  for (const e of log) {
+    if (e.action !== 'defer' || !e.commitmentId) continue;
+    const cur = out.get(e.commitmentId) ?? { n: 0, lastReason: null };
+    if (cur.n === 0) cur.lastReason = e.detail.replace(/^until \d{4}-\d{2}-\d{2}: /, '').replace(/ \(his words: .*\)$/, '');
+    cur.n += 1;
+    out.set(e.commitmentId, cur);
+  }
+  return out;
+}
+
+const FLOOR_HINT =
+  'Give it a small floor block (15 to 25 minutes) in today\'s plan instead, or shrink or re-date it with set_commitments, or ask him. ' +
+  'Only if he told you to defer it, call defer_commitment again with his_words set to what he said.';
+
+/** Why a deferral must not go through, or null if it may. `hisWords` = a quote of him asking for it. */
+export function deferRefusal(p: {
+  c: Commitment;
+  item: FrameworkItem;
+  isProtected: boolean;
+  history: DeferHistory;
+  until: string;
+  reason: string;
+  hisWords: string | null;
+}): string | null {
+  if (p.hisWords) return null;
+  const { c, item, history } = p;
+  if (p.isProtected) return `"${c.id}" is protected: the planner may not defer it. ${FLOOR_HINT}`;
+  if (item.days_left !== null && item.days_left < 0) return `"${c.id}" is overdue (it was due ${c.due}): deferring doesn't help. Finish it, re-date it with set_commitments, or drop it. ${FLOOR_HINT}`;
+  if (c.due && p.until > c.due) return `deferring "${c.id}" until ${p.until} would put it past its due date (${c.due}). ${FLOOR_HINT}`;
+  const unfinished = item.remaining_minutes === null || item.remaining_minutes > 0;
+  if (item.days_left !== null && item.days_left <= AT_RISK_DAYS && unfinished && item.done_minutes === 0) {
+    return `"${c.id}" is due in ${item.days_left} day${item.days_left === 1 ? '' : 's'} with nothing done: it can't be deferred. ${FLOOR_HINT}`;
+  }
+  if (history.n >= 2) return `"${c.id}" has already been deferred ${history.n} times; a third deferral needs his words. ${FLOOR_HINT}`;
+  if (history.n === 1 && (p.reason.length < MIN_SECOND_REASON || p.reason === history.lastReason)) {
+    return `"${c.id}" was deferred before ("${history.lastReason ?? ''}"). A second deferral needs a new reason of at least ${MIN_SECOND_REASON} characters that says what changed.`;
+  }
+  return null;
+}
+
+export interface SlipItem {
+  id: string;
+  title: string;
+  due: string | null;
+  days_left: number | null;
+  done_minutes: number;
+  target_minutes: number | null;
+  times_deferred: number;
+  protected: boolean;
+  deferred_until: string | null;
+  in_todays_plan: boolean;
+  /** Protected and still at risk: today's plan must hold a small block for it. */
+  floor_needed: boolean;
+}
+
+/** Everything that is slipping: deferred at least once, overdue, due within a week with nothing done, or protected and behind. */
+export function computeSlipping(
+  commitments: Commitment[],
+  work: CommitmentWork[],
+  log: FrameworkLogEntry[],
+  protectedIds: Set<string>,
+  today: string,
+  plannedIds: Set<string>,
+): SlipItem[] {
+  const history = deferHistory(log);
+  const out: SlipItem[] = [];
+  for (const c of commitments) {
+    if (c.status !== 'open') continue;
+    const item = describeItem(c, work, today);
+    const n = history.get(c.id)?.n ?? 0;
+    const isProtected = protectedIds.has(c.id);
+    const unfinished = item.remaining_minutes === null || item.remaining_minutes > 0;
+    const overdue = item.days_left !== null && item.days_left < 0 && unfinished;
+    const atRisk = item.days_left !== null && item.days_left >= 0 && item.days_left <= AT_RISK_DAYS && unfinished && item.done_minutes === 0;
+    const floorNeeded = isProtected && unfinished && ((item.days_left !== null && item.days_left <= AT_RISK_DAYS) || item.signals.length > 0);
+    if (!(n >= 1 || overdue || atRisk || floorNeeded)) continue;
+    out.push({
+      id: c.id,
+      title: c.title,
+      due: c.due,
+      days_left: item.days_left,
+      done_minutes: item.done_minutes,
+      target_minutes: item.target_minutes,
+      times_deferred: n,
+      protected: isProtected,
+      deferred_until: item.deferred_until ?? null,
+      in_todays_plan: plannedIds.has(c.id),
+      floor_needed: floorNeeded,
+    });
+  }
+  return out.sort((a, b) => Number(b.floor_needed) - Number(a.floor_needed) || (a.days_left ?? 999) - (b.days_left ?? 999));
+}
+
+/** One plain line per slipping item, for the top of the day. */
+export function slippingLines(items: SlipItem[]): string[] {
+  return items.map((i) => {
+    const when = i.days_left === null ? 'no due date' : i.days_left < 0 ? `overdue by ${-i.days_left} day${i.days_left === -1 ? '' : 's'}` : i.days_left === 0 ? 'due today' : `due in ${i.days_left} day${i.days_left === 1 ? '' : 's'}`;
+    const size = i.target_minutes === null ? `${i.done_minutes} min done` : `${i.done_minutes} of ${i.target_minutes} min done`;
+    const bits = [when, size];
+    if (i.times_deferred > 0) bits.push(`deferred ${i.times_deferred} time${i.times_deferred === 1 ? '' : 's'}`);
+    if (i.deferred_until) bits.push(`set aside until ${i.deferred_until}`);
+    if (i.protected) bits.push('protected');
+    if (!i.in_todays_plan) bits.push("NOT in today's plan");
+    return `- ${i.title}: ${bits.join(', ')}`;
+  });
 }
 
 /** Flagged commitments that nothing in the given plan works on. */

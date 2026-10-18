@@ -721,7 +721,7 @@ describe('framework: suggestions, deferrals and the publish check', () => {
     expect(desc('get_framework')).toContain('free to');
     expect(desc('get_framework')).toContain('never WHEN');
     expect(desc('set_commitments')).toContain('disagree');
-    expect(desc('defer_commitment')).toContain('normal, respected choice');
+    expect(desc('defer_commitment')).toContain('deliberately hard');
   });
 
   it('stores rough commitments with the proposing agent\'s reasoning, and merges partial updates', async () => {
@@ -759,13 +759,13 @@ describe('framework: suggestions, deferrals and the publish check', () => {
 
   it('lets an agent leave something out on purpose, and keeps the reason for the next one', async () => {
     await propose([{ id: 'sat-prep', title: 'SAT prep push', due: '2026-10-03', target_minutes: 300 }], { reviewed: true });
-    const deferred = await tool('defer_commitment', { id: 'sat-prep', until: '2026-10-05', reason: 'SAT taper: nothing new before the test' });
+    const deferred = await tool('defer_commitment', { id: 'sat-prep', until: '2026-10-05', reason: 'SAT taper: nothing new before the test', his_words: 'skip SAT until the taper is over' }); // due in 2 days with nothing done: only on his word
     expect(deferred.data).toMatchObject({ id: 'sat-prep', deferred_until: '2026-10-05' });
 
     const f = await framework();
     expect(f.worth_a_look).toEqual([]);
     expect(f.deferred[0]).toMatchObject({ id: 'sat-prep', deferred_until: '2026-10-05', deferred_reason: 'SAT taper: nothing new before the test' });
-    expect(f.recent_choices[0]).toMatchObject({ commitment: 'sat-prep', action: 'defer', detail: 'until 2026-10-05: SAT taper: nothing new before the test' });
+    expect(f.recent_choices[0]).toMatchObject({ commitment: 'sat-prep', action: 'defer', detail: 'until 2026-10-05: SAT taper: nothing new before the test (his words: "skip SAT until the taper is over")' });
     const quiet = await tool('set_daily_plan', { tasks: [{ title: 'Calc' }] });
     expect(quiet.data.framework_check).toBeUndefined(); // deferred on purpose and reviewed: nothing to report
 

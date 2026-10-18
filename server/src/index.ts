@@ -1,8 +1,9 @@
 import { bearerMatches, tokenConfigured, tokenMatches } from './auth';
 import { D1TaskStore } from './d1-store';
-import { resolveDate } from './dates';
+import { plannerToday, resolveDate } from './dates';
 import { FirebaseSite } from './firebase';
 import { handleMcpPost } from './mcp';
+import { slippingSection } from './slipping';
 import { parsePrefixes, reconcile, type SyncConfig } from './sync';
 import { ValidationError, parseGym, parsePatch, parseRating, type Task, type TaskStore } from './tasks';
 
@@ -170,10 +171,11 @@ async function handleInner(
       const date = resolveDate(url.searchParams.get('date'), timeZone, now);
       const [tasks, info, rating] = await Promise.all([store.list(date), store.getDayInfo(date), store.getRating(date)]);
       await reconcile(store, tasks, sync); // pull in anything he ticked on the site
+      const slip = date === plannerToday(timeZone, now) ? await slippingSection(store, date, tasks) : null;
       return json({
         date,
         headline: info.headline,
-        sections: info.sections,
+        sections: slip ? [slip, ...info.sections] : info.sections,
         rating,
         tasks: tasks.map(apiView),
       });
