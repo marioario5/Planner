@@ -64,14 +64,14 @@ describe('get_history latest_day_info', () => {
       return JSON.parse(((await res.json()) as any).result.content[0].text);
     };
     expect((await call('get_history', {})).latest_day_info).toBeNull();
-    await call('set_day_info', { date: '2026-10-10', headline: 'Sat', sections: [{ title: 'Next PCB work', body: '- Dr Dish bench Sunday, first step: power check' }] });
+    await call('set_day_info', { date: '2026-10-08', headline: 'Thu', sections: [{ title: 'Next PCB work', body: '- Dr Dish bench Sunday, first step: power check' }] });
     const h = await call('get_history', {});
-    expect(h.latest_day_info).toEqual({ date: '2026-10-10', headline: 'Sat', sections: [{ title: 'Next PCB work', body: '- Dr Dish bench Sunday, first step: power check' }] });
-    expect(h.last_next_pcb_work).toEqual({ date: '2026-10-10', body: '- Dr Dish bench Sunday, first step: power check' });
+    expect(h.latest_day_info).toEqual({ date: '2026-10-08', headline: 'Thu', sections: [{ title: 'Next PCB work', body: '- Dr Dish bench Sunday, first step: power check' }] });
+    expect(h.last_next_pcb_work).toEqual({ date: '2026-10-08', body: '- Dr Dish bench Sunday, first step: power check' });
     // a later chat update replaces the newer day's notes: the promise is still found on the earlier day
-    await call('set_day_info', { date: '2026-10-11', headline: 'Rest', sections: [{ title: 'Warnings', body: '- rest' }] });
+    await call('set_day_info', { date: '2026-10-10', headline: 'Rest', sections: [{ title: 'Warnings', body: '- rest' }] });
     const h2 = await call('get_history', {});
-    expect(h2.latest_day_info.date).toBe('2026-10-11');
-    expect(h2.last_next_pcb_work.date).toBe('2026-10-10');
+    expect(h2.latest_day_info.date).toBe('2026-10-10');
+    expect(h2.last_next_pcb_work.date).toBe('2026-10-08');
   });
 });
