@@ -208,7 +208,7 @@ const TOOLS = [
       'Tasks ticked after their planner day ended are `backfilled` (carried over and finished on a later day, or recorded late): they are listed in `timing.backfilled` and left out of every figure. ' +
       'If a day had both Plan A and Plan B, the day shows the one he followed (the plan with more tasks checked off, A on a tie) ' +
       'and `other_plan` gives the other one\'s totals. ' +
-      '`latest_day_info` is the notes the planner wrote for the most recent earlier day (headline and sections such as "Next PCB work"), so promises made then can be read without any saved plan file. ' +
+      '`latest_day_info` is the notes the planner wrote for the most recent earlier day (headline and sections such as "Next PCB work"), so promises made then can be read without any saved plan file. `last_next_pcb_work` is the newest "Next PCB work" section from the last 14 days, because a later update can replace a day notes. ' +
       'Days with no tasks are left out. Use it to see what slipped and what to carry forward. ' +
       'A task not checked off may still have been done: he has to tick it in the app.',
     inputSchema: {
@@ -1089,13 +1089,18 @@ async function history(args: Json, ctx: McpContext): Promise<Json> {
   });
   // Yesterday's notes (headline and sections such as "Next PCB work"): this is what the saved plan files used to be read for.
   let latestInfo: Json | null = null;
+  let pcbPromise: Json | null = null; // a later chat update can replace a day's notes, so look further back for the last "Next PCB work"
   const today = plannerToday(timeZone, now);
-  for (let back = 1; back <= 7 && latestInfo === null; back++) {
+  for (let back = 1; back <= 14 && (latestInfo === null || pcbPromise === null); back++) {
     const date = shiftDate(today, -back);
     const info = await store.getDayInfo(date);
-    if (info.headline || info.sections.length > 0) latestInfo = { date, headline: info.headline, sections: info.sections.map((s) => ({ title: s.title, body: s.body })) };
+    if (latestInfo === null && (info.headline || info.sections.length > 0)) {
+      latestInfo = { date, headline: info.headline, sections: info.sections.map((s) => ({ title: s.title, body: s.body })) };
+    }
+    const pcb = info.sections.find((s) => s.title.trim().toLowerCase() === 'next pcb work');
+    if (pcbPromise === null && pcb) pcbPromise = { date, body: pcb.body };
   }
-  return { from, through, done, total, days: out, latest_day_info: latestInfo };
+  return { from, through, done, total, days: out, latest_day_info: latestInfo, last_next_pcb_work: pcbPromise };
 }
 
 /** His progress site's state, exactly as stored, shaped for reading (see the get_site_progress tool). */
