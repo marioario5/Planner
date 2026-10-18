@@ -3,6 +3,7 @@ import { D1TaskStore } from './d1-store';
 import { plannerToday, resolveDate } from './dates';
 import { FirebaseSite, parseResets } from './firebase';
 import { handleMcpPost } from './mcp';
+import { runningTask } from './running';
 import { slippingSection } from './slipping';
 import { parsePrefixes, reconcile, type SyncConfig } from './sync';
 import { ValidationError, parseGym, parsePatch, parseRating, type Task, type TaskStore } from './tasks';
@@ -11,6 +12,8 @@ export interface Env {
   DB: D1Database;
   /** Shared secret. Set with `wrangler secret put API_TOKEN`. */
   API_TOKEN: string;
+  /** Optional second secret that may only read GET /api/running (for a display that must not be able to change anything). Set with `wrangler secret put READ_TOKEN`. */
+  READ_TOKEN?: string;
   PLANNER_TZ?: string;
   /** The progress site's Firebase state URL. Set with `wrangler secret put FIREBASE_STATE_URL`; unset = no site sync. */
   FIREBASE_STATE_URL?: string;
@@ -31,7 +34,7 @@ function allowedOrigins(env: Pick<Env, 'ALLOWED_ORIGINS'>): string[] {
     .filter(Boolean);
 }
 
-const isApiPath = (path: string) => path === '/api/rating' || path.startsWith('/api/gym/') || path === '/api/tasks' || path.startsWith('/api/tasks/');
+const isApiPath = (path: string) => path === '/api/rating' || path === '/api/running' || path.startsWith('/api/gym/') || path === '/api/tasks' || path.startsWith('/api/tasks/');
 
 /**
  * Lets the planner website (a different origin) call the app API. Only origins on the allow list get CORS headers, so
@@ -81,12 +84,13 @@ const apiView = (t: Task) => ({
  *   GET    /api/tasks?date=YYYY-MM-DD
  *   PATCH  /api/tasks/:id  {done?, started?, paused?, flagged?, title?, tag?, start?, minutes?, notes?, restoreStarted?, restoreCompleted?, restorePausedMs?}
  *   PUT    /api/gym/:id    {started, ended?}  gym switch (idempotent; the id is made by the app)
+ *   GET    /api/running    the task in progress (title, tag, planned minutes, worked time); READ_TOKEN may call only this
  *   PUT    /api/rating     {date?, rating: 1-5 | null}  how the day felt
  *   DELETE /api/tasks/:id
  */
 export async function handleRequest(
   request: Request,
-  env: Pick<Env, 'API_TOKEN' | 'PLANNER_TZ' | 'ALLOWED_ORIGINS'>,
+  env: Pick<Env, 'API_TOKEN' | 'PLANNER_TZ' | 'ALLOWED_ORIGINS'> & Partial<Pick<Env, 'READ_TOKEN'>>,
   store: TaskStore,
   now?: Date,
   sync?: SyncConfig,
@@ -111,7 +115,7 @@ export async function handleRequest(
 
 async function handleInner(
   request: Request,
-  env: Pick<Env, 'API_TOKEN' | 'PLANNER_TZ'>,
+  env: Pick<Env, 'API_TOKEN' | 'PLANNER_TZ'> & Partial<Pick<Env, 'READ_TOKEN'>>,
   store: TaskStore,
   now?: Date,
   sync?: SyncConfig,
@@ -123,7 +127,7 @@ async function handleInner(
   if (path === '/') return new Response('cozy-planner ok\n');
 
   const isMcp = path === '/mcp' || path.startsWith('/mcp/');
-  const isApi = path === '/api/tasks' || path.startsWith('/api/tasks/') || path === '/api/rating' || path.startsWith('/api/gym/');
+  const isApi = path === '/api/tasks' || path.startsWith('/api/tasks/') || path === '/api/rating' || path.startsWith('/api/gym/') || path === '/api/running';
   if (!isMcp && !isApi) return json({ error: 'not found' }, 404);
 
   if (!tokenConfigured(env.API_TOKEN)) {
@@ -142,6 +146,14 @@ async function handleInner(
         return new Response(null, { status: 405, headers: { Allow: 'POST' } });
       }
       return await handleMcpPost(request, { store, timeZone, now, sync });
+    }
+
+    if (path === '/api/running') {
+      if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405);
+      const full = await bearerMatches(request, env.API_TOKEN);
+      const readOnly = !full && tokenConfigured(env.READ_TOKEN) && (await bearerMatches(request, env.READ_TOKEN));
+      if (!full && !readOnly) return unauthorized();
+      return json(await runningTask(store, timeZone, now));
     }
 
     if (!(await bearerMatches(request, env.API_TOKEN))) return unauthorized();

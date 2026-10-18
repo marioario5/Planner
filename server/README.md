@@ -252,3 +252,7 @@ npm run dev              # http://localhost:8787
 ## Gym switch
 
 The phone app has a gym switch (start/stop). It records the time on the phone first and sends it when there is a connection (`PUT /api/gym/:id` with `{started, ended?}`; the app makes the id, so a retry never duplicates a session). The planner reads it with `get_gym_sessions`. Needs migration `0012_gym_sessions` (`npm run db:gym:remote`); `get_server_status` lists it if missing.
+
+## Running task (for a display)
+
+`GET /api/running` returns the task in progress (Start pressed, not finished) for today's planner day: `{now, planner_date, running: {id, title, tag, planned_min, started_at, paused, paused_at, paused_sec, elapsed_sec} | null, day: {plan, done, total}}`. No notes, nothing personal. `elapsed_sec` is worked time at `now` (since Start, minus every pause, an open pause counted up to now); a client can keep counting from it locally. Send `Authorization: Bearer <token>`. Besides `API_TOKEN`, an optional second secret `READ_TOKEN` (`wrangler secret put READ_TOKEN`, at least 16 characters) is accepted for this one endpoint and nothing else, so a wall display never holds a token that can change anything.
