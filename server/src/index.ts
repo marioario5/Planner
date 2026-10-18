@@ -1,7 +1,7 @@
 import { bearerMatches, tokenConfigured, tokenMatches } from './auth';
 import { D1TaskStore } from './d1-store';
 import { plannerToday, resolveDate } from './dates';
-import { FirebaseSite } from './firebase';
+import { FirebaseSite, parseResets } from './firebase';
 import { handleMcpPost } from './mcp';
 import { slippingSection } from './slipping';
 import { parsePrefixes, reconcile, type SyncConfig } from './sync';
@@ -16,6 +16,8 @@ export interface Env {
   FIREBASE_STATE_URL?: string;
   /** Comma-separated site task id prefixes to mirror. Default `calc3-`. */
   SYNC_PREFIXES?: string;
+  /** Resets of the site's plan, "prefix:epochMs" comma separated, e.g. "calc3-:1792347017018". Older check marks under the prefix are ignored. */
+  SYNC_RESET_BEFORE?: string;
   /** Comma-separated web origins allowed to call /api from a browser (the planner website). Default: the GitHub Pages site. */
   ALLOWED_ORIGINS?: string;
 }
@@ -216,7 +218,8 @@ export function sourceOf(request: Request): string {
 
 function syncFromEnv(env: Env): SyncConfig | undefined {
   if (!env.FIREBASE_STATE_URL) return undefined;
-  return { site: new FirebaseSite(env.FIREBASE_STATE_URL), prefixes: parsePrefixes(env.SYNC_PREFIXES) };
+  const resets = parseResets(env.SYNC_RESET_BEFORE);
+  return { site: new FirebaseSite(env.FIREBASE_STATE_URL, 5000, resets), prefixes: parsePrefixes(env.SYNC_PREFIXES), resets };
 }
 
 export default {

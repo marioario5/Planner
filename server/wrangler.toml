@@ -5,6 +5,9 @@ compatibility_date = "2026-09-01"
 [vars]
 # IANA zone used when a request doesn't say which day it means.
 PLANNER_TZ = "America/Los_Angeles"
+# The progress site's Calc 3 plan was rewritten on Oct 18, 2026 (its STATE_RESETS token 2026-10-18-nov6-plan). Check marks under calc3- stamped
+# before this moment belong to the old plan and are ignored until the site clears them. Add a new "prefix:epochMs" when the plan is rewritten again.
+SYNC_RESET_BEFORE = "calc3-:1792347017018"
 
 [[d1_databases]]
 binding = "DB"

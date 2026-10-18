@@ -14,8 +14,33 @@ export interface SiteSnapshot {
   etag: string | null;
   /** The whole state node, untouched, so unknown keys survive a write-back. */
   state: Record<string, unknown>;
-  /** `state.tasks` parsed into key -> latest value + timestamp. */
+  /** `state.tasks` parsed into key -> latest value + timestamp, without entries that predate a reset (see SiteReset). */
   entries: Map<string, SiteEntry>;
+  /** How many entries were dropped because they predate a reset. */
+  ignored?: number;
+}
+
+/**
+ * The site's plan was rewritten at `ms` (its STATE_RESETS token): entries under `prefix` stamped before that describe the OLD plan
+ * (the same task ids now mean other lessons), so they must never count as done. The site clears them itself the next time it is
+ * opened; until then this keeps a stale check mark from marking today's lesson done.
+ */
+export interface SiteReset {
+  prefix: string;
+  ms: number;
+}
+
+/** "calc3-:1792347017018,other-:123" -> resets. Bad pieces are ignored. */
+export function parseResets(value: string | undefined): SiteReset[] {
+  return (value ?? '')
+    .split(',')
+    .map((p) => p.trim())
+    .filter(Boolean)
+    .map((p) => {
+      const i = p.lastIndexOf(':');
+      return { prefix: p.slice(0, i), ms: Number(p.slice(i + 1)) };
+    })
+    .filter((r) => r.prefix !== '' && Number.isFinite(r.ms) && r.ms > 0);
 }
 
 export interface SiteClient {
@@ -45,6 +70,7 @@ export class FirebaseSite implements SiteClient {
   constructor(
     private readonly url: string,
     private readonly timeoutMs = 5000,
+    readonly resets: SiteReset[] = [],
   ) {}
 
   async read(): Promise<SiteSnapshot> {
@@ -55,7 +81,14 @@ export class FirebaseSite implements SiteClient {
     if (!res.ok) throw new Error(`firebase read failed: HTTP ${res.status}`);
     const body = (await res.json()) as Record<string, unknown> | null;
     const state = body && typeof body === 'object' && !Array.isArray(body) ? body : {};
-    return { etag: res.headers.get('ETag'), state, entries: parseEntries(state) };
+    const all = parseEntries(state);
+    const entries = new Map<string, SiteEntry>();
+    let ignored = 0;
+    for (const [key, e] of all) {
+      if (this.resets.some((r) => key.startsWith(r.prefix) && e.t < r.ms)) ignored++;
+      else entries.set(key, e);
+    }
+    return { etag: res.headers.get('ETag'), state, entries, ignored };
   }
 
   async write(state: Record<string, unknown>, etag: string | null): Promise<boolean> {

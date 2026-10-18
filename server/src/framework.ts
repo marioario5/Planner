@@ -176,6 +176,8 @@ export function computeFramework(
 
 /** Where the protected ids live (framework_meta), as a JSON list. */
 export const PROTECTED_KEY = 'protected_commitments';
+/** Daily items (Calc 3): never deferred, not even with his words, and a block in every single plan. They are protected too. */
+export const DAILY_KEY = 'daily_commitments';
 export const AT_RISK_DAYS = 7;
 export const MIN_SECOND_REASON = 30;
 
@@ -216,11 +218,13 @@ export function deferRefusal(p: {
   c: Commitment;
   item: FrameworkItem;
   isProtected: boolean;
+  isDaily?: boolean;
   history: DeferHistory;
   until: string;
   reason: string;
   hisWords: string | null;
 }): string | null {
+  if (p.isDaily) return `"${p.c.id}" is a daily item: it is never deferred, not even on his word, and every plan must hold a block for it. ${FLOOR_HINT.split(' Only if')[0]}`;
   if (p.hisWords) return null;
   const { c, item, history } = p;
   if (p.isProtected) return `"${c.id}" is protected: the planner may not defer it. ${FLOOR_HINT}`;
@@ -246,6 +250,8 @@ export interface SlipItem {
   target_minutes: number | null;
   times_deferred: number;
   protected: boolean;
+  /** A daily item (Calc 3): a block in every plan, no deferral at all. */
+  daily: boolean;
   deferred_until: string | null;
   in_todays_plan: boolean;
   /** Protected and still at risk: today's plan must hold a small block for it. */
@@ -260,6 +266,7 @@ export function computeSlipping(
   protectedIds: Set<string>,
   today: string,
   plannedIds: Set<string>,
+  dailyIds: Set<string> = new Set(),
 ): SlipItem[] {
   const history = deferHistory(log);
   const out: SlipItem[] = [];
@@ -271,8 +278,9 @@ export function computeSlipping(
     const unfinished = item.remaining_minutes === null || item.remaining_minutes > 0;
     const overdue = item.days_left !== null && item.days_left < 0 && unfinished;
     const atRisk = item.days_left !== null && item.days_left >= 0 && item.days_left <= AT_RISK_DAYS && unfinished && item.done_minutes === 0;
-    const floorNeeded = isProtected && unfinished && ((item.days_left !== null && item.days_left <= AT_RISK_DAYS) || item.signals.length > 0);
-    if (!(n >= 1 || overdue || atRisk || floorNeeded)) continue;
+    const isDaily = dailyIds.has(c.id);
+    const floorNeeded = isDaily || (isProtected && unfinished && ((item.days_left !== null && item.days_left <= AT_RISK_DAYS) || item.signals.length > 0));
+    if (!(n >= 1 || overdue || atRisk || floorNeeded) || (isDaily && plannedIds.has(c.id) && n === 0 && !overdue)) continue;
     out.push({
       id: c.id,
       title: c.title,
@@ -281,7 +289,8 @@ export function computeSlipping(
       done_minutes: item.done_minutes,
       target_minutes: item.target_minutes,
       times_deferred: n,
-      protected: isProtected,
+      protected: isProtected || isDaily,
+      daily: isDaily,
       deferred_until: item.deferred_until ?? null,
       in_todays_plan: plannedIds.has(c.id),
       floor_needed: floorNeeded,
@@ -298,7 +307,8 @@ export function slippingLines(items: SlipItem[]): string[] {
     const bits = [when, size];
     if (i.times_deferred > 0) bits.push(`deferred ${i.times_deferred} time${i.times_deferred === 1 ? '' : 's'}`);
     if (i.deferred_until) bits.push(`set aside until ${i.deferred_until}`);
-    if (i.protected) bits.push('protected');
+    if (i.daily) bits.push('DAILY, never deferred');
+    else if (i.protected) bits.push('protected');
     if (!i.in_todays_plan) bits.push("NOT in today's plan");
     return `- ${i.title}: ${bits.join(', ')}`;
   });

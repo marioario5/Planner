@@ -7,7 +7,7 @@
 // side. Unticking syncs too. Everything here is best effort: if the site can't be
 // reached the planner keeps working, and the next reconcile catches up.
 
-import { rowsOf, type SiteClient } from './firebase';
+import { rowsOf, type SiteClient, type SiteReset } from './firebase';
 import type { Task, TaskStore } from './tasks';
 
 export const DEFAULT_PREFIXES = ['calc3-'];
@@ -15,6 +15,8 @@ export const DEFAULT_PREFIXES = ['calc3-'];
 export interface SyncConfig {
   site: SiteClient;
   prefixes: string[];
+  /** Resets of the site's plan (see SiteReset); the client already applies them, this is for reporting. */
+  resets?: SiteReset[];
 }
 
 export function parsePrefixes(value: string | undefined): string[] {

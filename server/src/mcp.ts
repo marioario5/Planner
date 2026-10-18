@@ -7,6 +7,7 @@ import { localTime, plannerToday, plannerTimeToEpoch, resolveDate, shiftDate } f
 import {
   MAX_DEFER_DAYS,
   MAX_OPEN_COMMITMENTS,
+  DAILY_KEY,
   PROTECTED_KEY,
   computeFramework,
   computeSlipping,
@@ -388,7 +389,8 @@ const TOOLS = [
               status: { type: 'string', enum: [...COMMITMENT_STATUSES] },
               note: { type: ['string', 'null'], maxLength: 300, description: 'Your reasoning and assumptions.' },
               protected: { type: 'boolean', description: 'true = the planner may never defer it and must give it a small floor block while it is at risk. Anyone can turn it on; turning it off needs his_words.' },
-              his_words: { type: 'string', maxLength: 200, description: 'Only with protected: false: what he said when he asked to unprotect it.' },
+              daily: { type: 'boolean', description: 'true = needs a block in every plan and can never be deferred, even on his word (Calc 3). Implies protected. Turning it off needs his_words.' },
+              his_words: { type: 'string', maxLength: 200, description: 'Only with protected: false or daily: false: what he said when he asked for it.' },
             },
             required: ['id'],
           },
@@ -648,7 +650,8 @@ async function loadFramework(ctx: McpContext, includeAll = false) {
     store.getMeta('framework_reviewed_on'),
   ]);
   const protectedIds = parseProtected(await store.getMeta(PROTECTED_KEY));
-  return { today, commitments, work, log, protectedIds, framework: computeFramework(commitments, work, log, reviewedOn, today, includeAll) };
+  const dailyIds = parseProtected(await store.getMeta(DAILY_KEY));
+  return { today, commitments, work, log, protectedIds, dailyIds, framework: computeFramework(commitments, work, log, reviewedOn, today, includeAll) };
 }
 
 /** A task may only point at a commitment that exists and is still open. */
@@ -665,16 +668,16 @@ async function checkCommitments(ids: (string | null | undefined)[], ctx: McpCont
 
 /** After publishing today's plan: which flagged suggestions did the plan leave out? (Reported, never enforced.) */
 async function frameworkCheck(ctx: McpContext, date: string, todaysTasks: Task[]): Promise<Json | null> {
-  const { today, framework, commitments, work, log, protectedIds } = await loadFramework(ctx);
+  const { today, framework, commitments, work, log, protectedIds, dailyIds } = await loadFramework(ctx);
   if (date !== today) return null;
   const scheduled = new Set(todaysTasks.map((t) => t.commitmentId).filter((i): i is string => !!i));
   const left = unaddressed(framework, scheduled);
-  const floor = computeSlipping(commitments, work, log, protectedIds, today, scheduled).filter((s) => s.floor_needed && !s.in_todays_plan);
+  const floor = computeSlipping(commitments, work, log, protectedIds, today, scheduled, dailyIds).filter((s) => s.floor_needed && !s.in_todays_plan);
   if (left.length === 0 && floor.length === 0 && !framework.review_due) return null;
   return {
     ...(floor.length
       ? {
-          floor_blocks_missing: floor.map((s) => ({ id: s.id, title: s.title, deferred: s.times_deferred, done_minutes: s.done_minutes })),
+          floor_blocks_missing: floor.map((s) => ({ id: s.id, title: s.title, daily: s.daily, deferred: s.times_deferred, done_minutes: s.done_minutes })),
           floor_rule:
             'These are protected and at risk, and none has a block in this plan. Add a small floor block (15 to 25 minutes) for each, unless he told you not to study today ' +
             '(illness, injury, a day off), and then say so in Warnings. If the day cannot hold them, name what you are dropping or what he must renegotiate; never quietly push them later.',
@@ -707,6 +710,8 @@ async function setCommitments(args: Json, ctx: McpContext): Promise<Json> {
   const changed: { c: Commitment; closed: 'done' | 'dropped' | null; added: boolean }[] = [];
   const protectedIds = parseProtected(await store.getMeta(PROTECTED_KEY));
   const protectChanges: { id: string; on: boolean; words: string | null }[] = [];
+  const dailyIds = parseProtected(await store.getMeta(DAILY_KEY));
+  const dailyChanges: { id: string; on: boolean; words: string | null }[] = [];
   for (const raw of args.commitments) {
     if (typeof raw !== 'object' || raw === null) throw new ValidationError('each commitment must be an object with an id');
     const r = raw as Json;
@@ -744,8 +749,28 @@ async function setCommitments(args: Json, ctx: McpContext): Promise<Json> {
         if (words.length < 8 || words.length > 200) {
           throw new ValidationError(`"${id}" is protected: only he can unprotect it. Pass his_words with what he said (8 to 200 characters).`);
         }
+        if (dailyIds.has(id)) throw new ValidationError(`"${id}" is a daily item, so it stays protected; make it not daily first (needs his words).`);
         protectedIds.delete(id);
         protectChanges.push({ id, on: false, words });
+      }
+    }
+    if (has('daily')) {
+      if (typeof r.daily !== 'boolean') throw new ValidationError(`daily for "${id}" must be true or false`);
+      const isDaily = dailyIds.has(id);
+      if (r.daily && !isDaily) {
+        dailyIds.add(id);
+        if (!protectedIds.has(id)) {
+          protectedIds.add(id);
+          protectChanges.push({ id, on: true, words: null });
+        }
+        dailyChanges.push({ id, on: true, words: null });
+      } else if (!r.daily && isDaily) {
+        const words = typeof r.his_words === 'string' ? r.his_words.trim() : '';
+        if (words.length < 8 || words.length > 200) {
+          throw new ValidationError(`"${id}" is a daily item: only he can make it stop being one. Pass his_words with what he said (8 to 200 characters).`);
+        }
+        dailyIds.delete(id);
+        dailyChanges.push({ id, on: false, words });
       }
     }
     let closed: 'done' | 'dropped' | null = null;
@@ -771,6 +796,12 @@ async function setCommitments(args: Json, ctx: McpContext): Promise<Json> {
     await store.setMeta(PROTECTED_KEY, JSON.stringify([...protectedIds].sort()));
     for (const p of protectChanges) {
       await store.addFrameworkLog({ onDate: today, commitmentId: p.id, action: 'review', detail: p.on ? 'protected' : `unprotected (his words: "${p.words}")` });
+    }
+  }
+  if (dailyChanges.length > 0) {
+    await store.setMeta(DAILY_KEY, JSON.stringify([...dailyIds].sort()));
+    for (const p of dailyChanges) {
+      await store.addFrameworkLog({ onDate: today, commitmentId: p.id, action: 'review', detail: p.on ? 'made a daily item' : `no longer daily (his words: "${p.words}")` });
     }
   }
   for (const { c, closed } of changed) {
@@ -808,11 +839,12 @@ async function deferCommitment(args: Json, ctx: McpContext): Promise<Json> {
   }
   const reason = args.reason.trim();
   const hisWords = typeof args.his_words === 'string' && args.his_words.trim().length >= 8 ? args.his_words.trim().slice(0, 200) : null;
-  const [work, log, protectedRaw] = await Promise.all([store.commitmentWork(), store.listFrameworkLog(200), store.getMeta(PROTECTED_KEY)]);
+  const [work, log, protectedRaw, dailyRaw] = await Promise.all([store.commitmentWork(), store.listFrameworkLog(200), store.getMeta(PROTECTED_KEY), store.getMeta(DAILY_KEY)]);
   const refusal = deferRefusal({
     c,
     item: describeItem(c, work, today),
     isProtected: parseProtected(protectedRaw).has(id),
+    isDaily: parseProtected(dailyRaw).has(id),
     history: deferHistory(log).get(id) ?? { n: 0, lastReason: null },
     until,
     reason,
@@ -1090,13 +1122,26 @@ async function siteProgress(args: Json, ctx: McpContext): Promise<Json> {
     .filter((c) => c.date !== null && c.date >= from && c.date <= to)
     .sort((a, b) => (a.date! < b.date! ? -1 : a.date! > b.date! ? 1 : 0));
 
-  const days = (state.days as { value?: { calc3?: { rest?: unknown; sig?: unknown } } } | undefined)?.value?.calc3;
+  const daysNode = state.days as { t?: unknown; value?: { calc3?: { rest?: unknown; sig?: unknown } } } | undefined;
+  const days = daysNode?.value?.calc3;
+  const calcReset = (ctx.sync.resets ?? []).find((r) => r.prefix === 'calc3-');
+  const restStale = !!calcReset && !(typeof daysNode?.t === 'number' && daysNode.t >= calcReset.ms);
   return {
+    ...(restStale || (snap.ignored ?? 0) > 0
+      ? {
+          stale_state: {
+            ignored_entries: snap.ignored ?? 0,
+            rest_slots_ignored: restStale,
+            why: "The site's Calc 3 plan was rewritten after these check marks were stored, so they belong to the old plan and are left out. Until he opens the progress site once, it shows nothing done for the new plan: treat every Calc 3 lesson as not done, with no rest days, and say in Warnings that he should open the site to sync it.",
+          },
+        }
+      : {}),
+    calc3_sig: typeof days?.sig === 'string' ? days.sig : null,
     site_updated: typeof state.at === 'number' ? when(state.at) : null,
     prefix,
     tasks,
-    calc3_rest: Array.isArray(days?.rest) ? days!.rest : [],
-    calc3_rest_note: 'Rest-day slot numbers, counted from slot 0 = Sat Sept 19, 2026 (see the planner rules for how slots map to lessons).',
+    calc3_rest: !restStale && Array.isArray(days?.rest) ? days!.rest : [],
+    calc3_rest_note: "Rest-day slot numbers, counted from slot 0 = the first day of the Calc 3 plan in the site source (the start of its first week in DAY_GRIDS; see the planner rules for how slots map to lessons). Empty = no rest days.",
     calendar_range: { from, to },
     cal,
   };
@@ -1193,8 +1238,8 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
       return habits(args, ctx);
     case 'get_framework': {
       const f = await loadFramework(ctx, args.all === true);
-      const slipping = computeSlipping(f.commitments, f.work, f.log, f.protectedIds, f.today, new Set());
-      return { ...f.framework, protected: [...f.protectedIds], slipping, slipping_lines: slippingLines(slipping) };
+      const slipping = computeSlipping(f.commitments, f.work, f.log, f.protectedIds, f.today, new Set(), f.dailyIds);
+      return { ...f.framework, protected: [...f.protectedIds], daily: [...f.dailyIds], slipping, slipping_lines: slippingLines(slipping) };
     }
     case 'set_commitments':
       return setCommitments(args, ctx);
