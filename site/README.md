@@ -51,13 +51,19 @@ setx SITE_URL "https://<your-worker>.workers.dev"
 setx SITE_TOKEN "<your API token>"
 ```
 
+To not type the password either, save it the same way (it then lives in your Windows account's settings on this computer only, never in the repo):
+
+```powershell
+setx SITE_PASSWORD "<the site password>"
+```
+
 Open a new terminal, then from `server/`:
 
 ```bash
 npm run site:publish
 ```
 
-It asks only for the password, rebuilds, commits just `docs/` and pushes. If nothing changed it says so and stops.
+With all three set it asks for nothing: it rebuilds, commits just `docs/` and pushes. The build prints the password's length (this computer only) so you can check the saved one is what you expect. If nothing changed it says so and stops. If you change the password, run `setx` again.
 
 ### The automatic way (GitHub Action)
 

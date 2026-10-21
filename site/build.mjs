@@ -74,6 +74,8 @@ const password = process.env.SITE_PASSWORD ?? (await askHidden('Site password: '
 try {
   if (password.length < 12) console.warn('\nNote: that password is short. Anyone can try guesses against the page offline; a longer one is safer.');
   console.log(`\nToken length: ${token.length} characters.`);
+  // Only on this computer (never in a CI log, which can be public): lets you check the saved password has the length you expect.
+  if (!process.env.CI) console.log(`Password length: ${password.length} characters.`);
   await checkServer(url, token);
   const { html } = await buildSite({ url, token, password });
   const out = join(here, '..', 'docs');
