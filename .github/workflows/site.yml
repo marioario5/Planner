@@ -1,0 +1,75 @@
+# Rebuilds the locked website (docs/index.html) and publishes it whenever the website's code or the verse list changes.
+# It needs three repository secrets (Settings > Secrets and variables > Actions): SITE_URL, SITE_TOKEN and SITE_PASSWORD.
+# Run it by hand any time from the Actions tab ("Rebuild website" > Run workflow), for example after changing the token or the password.
+name: Rebuild website
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'assets/verses.json'
+  workflow_dispatch:
+
+# one build at a time, and never cancel one halfway through a push
+concurrency:
+  group: site-build
+  cancel-in-progress: false
+
+permissions:
+  contents: write # to commit docs/
+  pages: write # to ask Pages to publish it
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Check the secrets are set
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          SITE_TOKEN: ${{ secrets.SITE_TOKEN }}
+          SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
+        run: |
+          for name in SITE_URL SITE_TOKEN SITE_PASSWORD; do
+            if [ -z "${!name}" ]; then
+              echo "::error::The repository secret $name is not set. Add it under Settings > Secrets and variables > Actions."
+              exit 1
+            fi
+          done
+
+      - name: Build the locked page
+        env:
+          SITE_URL: ${{ secrets.SITE_URL }}
+          SITE_TOKEN: ${{ secrets.SITE_TOKEN }}
+          SITE_PASSWORD: ${{ secrets.SITE_PASSWORD }}
+        run: node site/build.mjs
+
+      - name: Commit the new page
+        id: commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- docs
+          if git diff --cached --quiet -- docs; then
+            echo "The page did not change."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git commit -m "Rebuild website (automatic)" -- docs
+          git pull --rebase origin main
+          git push origin HEAD:main
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+
+      # Pushes made with the built-in token do not always start a Pages build by themselves, so ask for one.
+      - name: Ask GitHub Pages to publish
+        if: steps.commit.outputs.changed == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/${{ github.repository }}/pages/builds"

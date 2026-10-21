@@ -59,6 +59,12 @@ npm run site:publish
 
 It asks only for the password, rebuilds, commits just `docs/` and pushes. If nothing changed it says so and stops.
 
+### The automatic way (GitHub Action)
+
+`.github/workflows/site.yml` rebuilds and publishes the page by itself whenever anything in `site/` or `assets/verses.json` is pushed, and on demand from the Actions tab ("Rebuild website" > Run workflow). It needs three repository secrets (Settings > Secrets and variables > Actions > New repository secret): `SITE_URL`, `SITE_TOKEN` and `SITE_PASSWORD`. GitHub keeps them encrypted and never shows them again. Change a secret there whenever the token, address or password changes, then run the workflow once by hand.
+
+Trade-off: with this, the password lives at GitHub (as a secret) instead of only in your head. The page itself is still encrypted with it. The action commits `docs/` to `main` as `github-actions[bot]`, so run `git pull` before your next push.
+
 The server must allow the site's origin. By default it allows `https://marioario5.github.io`; for another address set the
 `ALLOWED_ORIGINS` variable on the Worker (comma-separated).
 
