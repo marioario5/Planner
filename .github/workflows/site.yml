@@ -1,14 +1,12 @@
-# Rebuilds the locked website (docs/index.html) and publishes it whenever the website's code or the verse list changes.
+# Rebuilds the locked website (docs/index.html) and publishes it (now only when started by hand, see below).
 # It needs three repository secrets (Settings > Secrets and variables > Actions): SITE_URL, SITE_TOKEN and SITE_PASSWORD.
 # Run it by hand any time from the Actions tab ("Rebuild website" > Run workflow), for example after changing the token or the password.
 name: Rebuild website
 
+# SWITCHED OFF (Oct 21 2026): this run locked the site with a password that did not match the one he types, and he could not log in.
+# The password is back to being typed only on his own computer: rebuild with `cd server && npm run site:publish`.
+# It no longer starts by itself; "Run workflow" in the Actions tab still works, but only use it after re-saving SITE_PASSWORD.
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'site/**'
-      - 'assets/verses.json'
   workflow_dispatch:
 
 # one build at a time, and never cancel one halfway through a push

@@ -61,7 +61,9 @@ It asks only for the password, rebuilds, commits just `docs/` and pushes. If not
 
 ### The automatic way (GitHub Action)
 
-`.github/workflows/site.yml` rebuilds and publishes the page by itself whenever anything in `site/` or `assets/verses.json` is pushed, and on demand from the Actions tab ("Rebuild website" > Run workflow). It needs three repository secrets (Settings > Secrets and variables > Actions > New repository secret): `SITE_URL`, `SITE_TOKEN` and `SITE_PASSWORD`. GitHub keeps them encrypted and never shows them again. Change a secret there whenever the token, address or password changes, then run the workflow once by hand.
+**Switched off:** the first run locked the site with a password that did not match the one typed locally, and the login stopped working, so it now only runs when started by hand. Rebuild with `npm run site:publish` instead.
+
+`.github/workflows/site.yml` can rebuild and publish the page (it no longer starts by itself); it can be run on demand from the Actions tab ("Rebuild website" > Run workflow). It needs three repository secrets (Settings > Secrets and variables > Actions > New repository secret): `SITE_URL`, `SITE_TOKEN` and `SITE_PASSWORD`. GitHub keeps them encrypted and never shows them again. Change a secret there whenever the token, address or password changes, then run the workflow once by hand.
 
 Trade-off: with this, the password lives at GitHub (as a secret) instead of only in your head. The page itself is still encrypted with it. The action commits `docs/` to `main` as `github-actions[bot]`, so run `git pull` before your next push.
 
