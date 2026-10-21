@@ -34,8 +34,16 @@ describe('the YouTube-mode switch (PUT /api/music/:id)', () => {
     expect((await put(store, 'm1', { started: '2026-10-20T22:00:00Z' })).status).toBe(200);
     await put(store, 'm1', { started: '2026-10-20T22:00:00Z', ended: '2026-10-20T23:00:00Z' });
     await put(store, 'm1', { started: '2026-10-20T22:00:00Z' }); // the first message, retried late
-    expect(store.music).toEqual([{ id: 'm1', startedAt: '2026-10-20T22:00:00.000Z', endedAt: '2026-10-20T23:00:00.000Z' }]);
+    expect(store.music).toEqual([{ id: 'm1', startedAt: '2026-10-20T22:00:00.000Z', endedAt: '2026-10-20T23:00:00.000Z', mode: 'browsing' }]);
     expect(store.gym).toEqual([]); // never mixed with the gym
+  });
+
+  it('keeps the mode (lecture or browsing), defaults to browsing, and rejects an unknown one', async () => {
+    const store = new MemoryTaskStore();
+    await put(store, 'l1', { started: '2026-10-20T22:00:00Z', mode: 'lecture' });
+    await put(store, 'b1', { started: '2026-10-20T23:00:00Z' });
+    expect(store.music.map((s) => [s.id, s.mode])).toEqual([['l1', 'lecture'], ['b1', 'browsing']]);
+    expect((await put(store, 'x1', { started: '2026-10-20T22:00:00Z', mode: 'podcast' })).status).toBe(400);
   });
 
   it('rejects bad input and unknown tokens (the music token cannot write sessions)', async () => {
@@ -75,11 +83,11 @@ describe('the separate music MCP endpoint', () => {
   it('lists sessions with local times and marks an open one', async () => {
     const store = new MemoryTaskStore();
     await store.saveMusic({ id: 'a', startedAt: '2026-10-19T23:00:00Z', endedAt: '2026-10-20T00:30:00Z' }); // 4:00-5:30pm Oct 19
-    await store.saveMusic({ id: 'b', startedAt: '2026-10-21T02:00:00Z', endedAt: null }); // 7:00pm Oct 20, still on
+    await store.saveMusic({ id: 'b', startedAt: '2026-10-21T02:00:00Z', endedAt: null, mode: 'lecture' }); // 7:00pm Oct 20, still on
     const r = (await callTool(store, '/music/mcp', music, 'get_music_sessions')).data;
     expect(r.sessions).toEqual([
-      { date: '2026-10-19', start: '16:00', end: '17:30', minutes: 90, open: false },
-      { date: '2026-10-20', start: '19:00', end: null, minutes: null, open: true },
+      { date: '2026-10-19', start: '16:00', mode: 'browsing', end: '17:30', minutes: 90, open: false },
+      { date: '2026-10-20', start: '19:00', mode: 'lecture', end: null, minutes: null, open: true },
     ]);
   });
 });
@@ -123,16 +131,18 @@ describe('YouTube versus silence over finished blocks', () => {
   const yt = ['2026-10-12', '2026-10-13', '2026-10-14'];
   const quiet = ['2026-10-15', '2026-10-16', '2026-10-17'];
   const tasks = [...yt.map((d) => block(d, 'calculus3', '17:00', '17:35')), ...quiet.map((d) => block(d, 'calculus3', '17:00', '17:24'))];
-  const sessions: GymSession[] = yt.map((d, i) => ({ id: `s${i}`, startedAt: `${d}T16:30:00-07:00`, endedAt: `${d}T18:00:00-07:00` }));
+  const sessions: GymSession[] = yt.map((d, i) => ({ id: `s${i}`, startedAt: `${d}T16:30:00-07:00`, endedAt: `${d}T18:00:00-07:00`, mode: 'browsing' as const }));
 
   it('groups blocks by overlap and compares real time with planned', () => {
     const nowMs = Date.parse('2026-10-20T12:00:00-07:00');
     const r = computeMusicStats(tasks, sessions, 'America/Los_Angeles', '2026-10-20', 28, nowMs);
     expect(r.blocks_used).toBe(6);
-    expect(r.by_mode.youtube).toMatchObject({ n: 3, median_ratio_of_planned: 1.17, median_actual_min: 35 });
+    expect(r.by_mode.browsing).toMatchObject({ n: 3, median_ratio_of_planned: 1.17, median_actual_min: 35 });
+    expect(r.by_mode.lecture.n).toBe(0);
     expect(r.by_mode.silence).toMatchObject({ n: 3, median_ratio_of_planned: 0.8, median_actual_min: 24 });
     expect(r.by_mode.mixed.n).toBe(0);
     expect(Object.keys(r.by_tag)).toEqual(['calculus3']);
+    expect(Object.keys(r.by_tag.calculus3)).toEqual(['silence', 'browsing']);
     expect(r.whole_days.youtube_days.days).toBe(3);
     expect(r.whole_days.quiet_days.days).toBeGreaterThanOrEqual(3);
   });
@@ -143,6 +153,17 @@ describe('YouTube versus silence over finished blocks', () => {
     const r = computeMusicStats([half], s, 'America/Los_Angeles', '2026-10-20', 28, Date.parse('2026-10-20T12:00:00-07:00'));
     expect(r.by_mode.mixed.n).toBe(1);
     expect(r.too_few_to_split.join()).toContain('sat');
+  });
+
+  it('a lecture session makes its blocks lecture blocks, kept apart from browsing', () => {
+    const lec = ['2026-10-12', '2026-10-13', '2026-10-14'].map((d) => block(d, 'calculus3', '17:00', '17:40'));
+    const lecSessions: GymSession[] = lec.map((t, i) => ({ id: `l${i}`, startedAt: `${t.date}T16:50:00-07:00`, endedAt: `${t.date}T17:45:00-07:00`, mode: 'lecture' as const }));
+    const r = computeMusicStats([...lec, ...tasks.slice(3)], lecSessions, 'America/Los_Angeles', '2026-10-20', 28, Date.parse('2026-10-20T12:00:00-07:00'));
+    expect(r.by_mode.lecture.n).toBe(3);
+    expect(r.by_mode.browsing.n).toBe(0);
+    expect(r.by_mode.silence.n).toBe(3);
+    expect(r.sessions).toMatchObject({ count: 3, lecture: 3, browsing: 0 });
+    expect(Object.keys(r.by_tag.calculus3)).toEqual(['silence', 'lecture']);
   });
 
   it('flagged blocks and batch ticks are left out, and a forgotten open session is capped', () => {

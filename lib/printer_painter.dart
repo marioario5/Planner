@@ -3,10 +3,11 @@ import 'package:flutter/material.dart';
 /// Paints the pixel-art printer faithful to the HTML canvas version.
 class PrinterPainter extends CustomPainter {
   final double blinkPhase; // 0.0–1.0 drives light animations
-  /// YouTube mode: the pink button looks pressed in, with a small dark dot, while it is on.
-  final bool youtubeOn;
+  /// YouTube mode, shown on the printer's button: null = off (pink), `browsing` = muted blue, `lecture` = muted green.
+  /// While on, the button looks pressed in with a small dark dot.
+  final String? musicMode;
 
-  PrinterPainter({required this.blinkPhase, this.youtubeOn = false});
+  PrinterPainter({required this.blinkPhase, this.musicMode});
 
   static const double P = 4.0; // pixel size
 
@@ -28,6 +29,13 @@ class PrinterPainter extends CustomPainter {
   static const Color sage       = Color(0xFF8BAF7C);
   static const Color amber      = Color(0xFFD4A843);
   static const Color redLight   = Color(0xFFc97a7a);
+  // The button's other two colours: the app's own muted blue and green, so neither stands out against the brown printer.
+  static const Color blue       = Color(0xFF6C8EBF);
+  static const Color bluehi     = Color(0xFF9DB8DC);
+  static const Color bluedark   = Color(0xFF4A6791);
+  static const Color green      = Color(0xFF8BAF7C);
+  static const Color greenhi    = Color(0xFFB3CDA6);
+  static const Color greendark  = Color(0xFF5E7E52);
 
   void px(Canvas canvas, int x, int y, Color color, {int w = 1, int h = 1}) {
     canvas.drawRect(
@@ -81,16 +89,20 @@ class PrinterPainter extends CustomPainter {
     px(canvas, 23, 20, dark); px(canvas, 56, 20, dark);
     px(canvas, 23, 21, dark); px(canvas, 56, 21, dark);
 
-    // Rose button (also the YouTube-mode switch: pressed in, with a dark dot, while it is on)
+    // The button: pink = nothing, blue = YouTube browsing, green = YouTube lecture (pressed in, with a dark dot, while on)
+    final bool on = musicMode != null;
+    final Color face = musicMode == 'lecture' ? green : musicMode == 'browsing' ? blue : rose;
+    final Color lit = musicMode == 'lecture' ? greenhi : musicMode == 'browsing' ? bluehi : rosehi;
+    final Color shadow = musicMode == 'lecture' ? greendark : musicMode == 'browsing' ? bluedark : rosedark;
     for (int bx = 6; bx < 13; bx++) {
       for (int by = 7; by < 11; by++) {
-        Color shade = youtubeOn ? rosehi : rose;
-        if (bx == 6 || by == 7) shade = youtubeOn ? rosedark : rosehi;
-        if (bx == 12 || by == 10) shade = youtubeOn ? rosehi : rosedark;
+        Color shade = face;
+        if (bx == 6 || by == 7) shade = on ? shadow : lit;
+        if (bx == 12 || by == 10) shade = on ? lit : shadow;
         px(canvas, bx, by, shade);
       }
     }
-    if (youtubeOn) px(canvas, 9, 8, dark, w: 2, h: 2);
+    if (on) px(canvas, 9, 8, dark, w: 2, h: 2);
 
     // Vents
     for (int v = 0; v < 3; v++) {

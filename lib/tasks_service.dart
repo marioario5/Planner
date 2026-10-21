@@ -179,7 +179,7 @@ class TasksService {
       _patchTask(task, {'flagged': flagged});
 
   /// Sends one gym session (the server keeps it by [id], so sending twice is harmless). True once the server has it.
-  static Future<bool> putGym(String id, DateTime started, DateTime? ended) async {
+  static Future<bool> putGym(String id, DateTime started, DateTime? ended, [String? mode]) async {
     if (!isConfigured) return false;
 
     try {
@@ -201,7 +201,7 @@ class TasksService {
   }
 
   /// Sends one YouTube-mode stretch (the music experiment). Same rules as [putGym]: safe to repeat, true once the server has it.
-  static Future<bool> putMusic(String id, DateTime started, DateTime? ended) async {
+  static Future<bool> putMusic(String id, DateTime started, DateTime? ended, [String? mode]) async {
     if (!isConfigured) return false;
 
     try {
@@ -212,6 +212,7 @@ class TasksService {
             body: jsonEncode({
               'started': started.toUtc().toIso8601String(),
               'ended': ended?.toUtc().toIso8601String(),
+              'mode': mode ?? 'browsing',
             }),
           )
           .timeout(_timeout);

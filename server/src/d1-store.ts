@@ -17,6 +17,7 @@ import {
   type HabitVersion,
   type NewTask,
   type GymSession,
+  type MusicMode,
   type TaskEvent,
   TASK_EVENTS_KEPT,
   type Plan,
@@ -273,7 +274,12 @@ export class D1TaskStore implements TaskStore {
   async schemaReport(): Promise<SchemaReport> {
     const tables = await this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all<{ name: string }>();
     const columns = await this.db.prepare('PRAGMA table_info(tasks)').all<{ name: string }>();
-    return checkSchema(new Set(tables.results.map((r) => r.name)), new Set(columns.results.map((r) => r.name)));
+    const music = await this.db.prepare('PRAGMA table_info(music_sessions)').all<{ name: string }>();
+    return checkSchema(
+      new Set(tables.results.map((r) => r.name)),
+      new Set(columns.results.map((r) => r.name)),
+      new Set(music.results.map((r) => `music_sessions.${r.name}`)),
+    );
   }
 
   async logEvent(e: Omit<TaskEvent, 'id' | 'at'>): Promise<void> {
@@ -329,21 +335,21 @@ export class D1TaskStore implements TaskStore {
   async saveMusic(s: GymSession): Promise<void> {
     await this.db
       .prepare(
-        `INSERT INTO music_sessions (id, started_at, ended_at, updated_at) VALUES (?, ?, ?, ?)
+        `INSERT INTO music_sessions (id, started_at, ended_at, updated_at, mode) VALUES (?, ?, ?, ?, ?)
          ON CONFLICT(id) DO UPDATE SET started_at = excluded.started_at,
-           ended_at = COALESCE(excluded.ended_at, music_sessions.ended_at), updated_at = excluded.updated_at`,
+           ended_at = COALESCE(excluded.ended_at, music_sessions.ended_at), updated_at = excluded.updated_at, mode = excluded.mode`,
       )
-      .bind(s.id, s.startedAt, s.endedAt, new Date().toISOString())
+      .bind(s.id, s.startedAt, s.endedAt, new Date().toISOString(), s.mode ?? 'browsing')
       .run();
   }
 
   async listMusic(fromIso: string): Promise<GymSession[]> {
     try {
       const { results } = await this.db
-        .prepare('SELECT id, started_at, ended_at FROM music_sessions WHERE started_at >= ? ORDER BY started_at')
+        .prepare('SELECT id, started_at, ended_at, mode FROM music_sessions WHERE started_at >= ? ORDER BY started_at')
         .bind(fromIso)
-        .all<{ id: string; started_at: string; ended_at: string | null }>();
-      return results.map((r) => ({ id: r.id, startedAt: r.started_at, endedAt: r.ended_at }));
+        .all<{ id: string; started_at: string; ended_at: string | null; mode: string }>();
+      return results.map((r) => ({ id: r.id, startedAt: r.started_at, endedAt: r.ended_at, mode: (r.mode === 'lecture' ? 'lecture' : 'browsing') as MusicMode }));
     } catch {
       return []; // table not migrated yet
     }

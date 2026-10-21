@@ -43,7 +43,13 @@ export interface GymSession {
   id: string;
   startedAt: string; // ISO
   endedAt: string | null; // null while he is still there
+  /** Music sessions only: what he was doing with YouTube on. */
+  mode?: MusicMode;
 }
+
+/** browsing = just watching videos; lecture = following along with something, like a Calc 3 lecture. */
+export const MUSIC_MODES = ['browsing', 'lecture'] as const;
+export type MusicMode = (typeof MUSIC_MODES)[number];
 
 /** One change to a task, kept briefly so an unexpected change can be traced to what sent it. */
 export interface TaskEvent {
@@ -512,6 +518,16 @@ export function parseGym(id: string, body: unknown): GymSession {
   const endedAt = r.ended === undefined || r.ended === null ? null : iso(r.ended, 'ended');
   if (endedAt !== null && endedAt < startedAt) throw new ValidationError('ended is before started');
   return { id, startedAt, endedAt };
+}
+
+/** Body of PUT /api/music/:id: like a gym session, plus a `mode` (browsing by default, so an older app still works). */
+export function parseMusic(id: string, body: unknown): GymSession {
+  const session = parseGym(id, body);
+  const mode = (body as Record<string, unknown> | null)?.mode;
+  if (mode !== undefined && mode !== null && !(MUSIC_MODES as readonly string[]).includes(mode as string)) {
+    throw new ValidationError(`mode must be one of: ${MUSIC_MODES.join(', ')}`);
+  }
+  return { ...session, mode: (mode as MusicMode | undefined) ?? 'browsing' };
 }
 
 export function parseRating(value: unknown): number | null {

@@ -10,7 +10,7 @@ void main() {
   late DateTime now;
 
   GymTracker make() => GymTracker(
-        send: (id, started, ended) async {
+        send: (id, started, ended, mode) async {
           if (!online) return false;
           sent.add('$id ${started.hour}:${started.minute} ${ended == null ? 'open' : '${ended.hour}:${ended.minute}'}');
           return true;
@@ -77,7 +77,7 @@ void main() {
   });
 
   test('a failed send never throws and is retried', () async {
-    final g = GymTracker(send: (id, s, e) async => throw Exception('no route'), clock: () => now);
+    final g = GymTracker(send: (id, s, e, m) async => throw Exception('no route'), clock: () => now);
     await g.toggle();
     expect(g.unsynced, 1);
     await g.flush();
@@ -88,7 +88,7 @@ void main() {
     late GymTracker g;
     var calls = 0;
     g = GymTracker(
-      send: (id, s, e) async {
+      send: (id, s, e, m) async {
         calls++;
         if (calls == 1) {
           now = now.add(const Duration(minutes: 20));

@@ -18,15 +18,15 @@ const SUPPORTED_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-0
 const SERVER_INFO = { name: 'cozy-planner-music', version: '1.0.0' };
 const MIN_PER_GROUP = 3; // blocks needed before a figure is shown
 const OPEN_SESSION_CAP_MS = 6 * 3_600_000; // an open session older than this was probably forgotten
-const YOUTUBE_SHARE = 0.6; // a block is a "youtube" block when at least this much of it overlapped a session
-const SILENCE_SHARE = 0.1; // ...and a "silence" block when no more than this did
+const SHARE_ON = 0.6; // a block counts as browsing/lecture when at least this much of it ran under that mode
+const SILENCE_SHARE = 0.1; // ...and as silence when no more than this ran under either
 
 export const MUSIC_INSTRUCTIONS =
-  'This is a separate experiment from the daily planner. A pink button on his phone app toggles "YouTube mode", and each stretch it was on is ' +
-  'recorded as a session. Everything else is silence. The planner never uses this data; you do. ' +
-  'Use get_music_stats to see how his work blocks went with YouTube on versus in silence, and set_music_experiments to run experiments on it, ' +
+  'This is a separate experiment from the daily planner. A button on the printer in his phone app cycles through three states: pink = nothing (silence), blue = YouTube browsing (just watching videos), ' +
+  'green = YouTube lecture (following along with something, like a Calc 3 lecture). Each stretch it was on is recorded as a session with its mode. Everything else is silence. The planner never uses this data; you do. ' +
+  'Use get_music_stats to see how his work blocks went in silence, with YouTube browsing, and with a YouTube lecture on, and set_music_experiments to run experiments on it, ' +
   'the same way the planner runs experiments: change ONE thing for several days (for example "silence during Calc 3"), and read the before/after in get_music_experiments. ' +
-  'The comparison is an association, not proof: he may put YouTube on for easy work and keep silence for hard work, so always say what else differs between the groups before drawing a conclusion. ' +
+  'The comparison is an association, not proof: he may put browsing on for easy work and keep silence for hard work, and a lecture is usually the study material itself, so always say what else differs between the groups before drawing a conclusion. ' +
   'Times are in the planner time zone (America/Los_Angeles); a planner day runs 04:00 to 04:00.';
 
 const dateOf = (ms: number, timeZone: string): string =>
@@ -65,13 +65,12 @@ function overlapMs(a: Span, spans: Span[]): number {
   return total;
 }
 
-export type Mode = 'youtube' | 'silence' | 'mixed';
+export type Mode = 'browsing' | 'lecture' | 'silence' | 'mixed';
 
 interface Block {
   date: string;
   tag: string;
   mode: Mode;
-  share: number;
   ratio: number | null; // real minutes / planned minutes
   actual: number;
   late: number | null;
@@ -86,57 +85,51 @@ const summarize = (blocks: Block[]) => ({
   median_start_delay_min: round(median(blocks.map((b) => b.delay).filter((x): x is number => x !== null)), 0),
 });
 
+const MODES: Mode[] = ['silence', 'browsing', 'lecture'];
+
 /**
- * How each finished work block went, split by whether YouTube mode was on while it ran. Only blocks with a trustworthy Start press and
- * finish are used (the same rule as the habit stats: flagged, backfilled and batch-ticked blocks are left out).
+ * How each finished work block went, split by what was on while it ran: silence, YouTube browsing (just watching videos) or a YouTube lecture
+ * (following along). Only blocks with a trustworthy Start press and finish are used (the same rule as the habit stats: flagged, backfilled
+ * and batch-ticked blocks are left out).
  */
 export function computeMusicStats(all: Task[], sessions: GymSession[], timeZone: string, today: string, days: number, nowMs: number) {
   const from = shiftDate(today, -days);
   const through = shiftDate(today, -1);
-  const { spans, open } = sessionSpans(sessions, nowMs);
+  const browsing = sessionSpans(sessions.filter((x) => x.mode !== 'lecture'), nowMs);
+  const lecture = sessionSpans(sessions.filter((x) => x.mode === 'lecture'), nowMs);
+  const anySpans = [...browsing.spans, ...lecture.spans];
 
   const blocks: Block[] = [];
-  const perDay: { date: string; youtube_min: number; planned: number; done: number }[] = [];
+  const perDay: { date: string; youtube_min: number; browsing_min: number; lecture_min: number; planned: number; done: number }[] = [];
   for (const d of finishedDays(all, timeZone, from, through)) {
     const work = d.tasks.filter((t) => t.tag !== 'other');
-    const dayStart = plannerTimeToEpoch(d.date, '04:00', timeZone);
-    const dayEnd = plannerTimeToEpoch(shiftDate(d.date, 1), '04:00', timeZone);
-    perDay.push({
-      date: d.date,
-      youtube_min: Math.round(overlapMs({ start: dayStart, end: dayEnd }, spans) / 60_000),
-      planned: work.length,
-      done: work.filter((t) => t.done).length,
-    });
+    const day = { start: plannerTimeToEpoch(d.date, '04:00', timeZone), end: plannerTimeToEpoch(shiftDate(d.date, 1), '04:00', timeZone) };
+    const bMin = Math.round(overlapMs(day, browsing.spans) / 60_000);
+    const lMin = Math.round(overlapMs(day, lecture.spans) / 60_000);
+    perDay.push({ date: d.date, youtube_min: bMin + lMin, browsing_min: bMin, lecture_min: lMin, planned: work.length, done: work.filter((t) => t.done).length });
     for (const t of work) {
       if (!t.done || !t.startedAt || !t.completedAt || isFlagged(t)) continue;
       const actual = actualMinutes(t, timeZone, d.bulkIds);
       if (actual === null || completedMinutes(t, timeZone, d.bulkIds) === null) continue;
       const window = { start: Date.parse(t.startedAt), end: Date.parse(t.completedAt) };
       if (window.end <= window.start) continue;
-      const share = overlapMs(window, spans) / (window.end - window.start);
-      blocks.push({
-        date: d.date,
-        tag: t.tag,
-        mode: share >= YOUTUBE_SHARE ? 'youtube' : share <= SILENCE_SHARE ? 'silence' : 'mixed',
-        share,
-        ratio: t.minutes ? actual / t.minutes : null,
-        actual,
-        late: d.slotLate.get(t.id) ?? null,
-        delay: startDelayMinutes(t, timeZone),
-      });
+      const len = window.end - window.start;
+      const bShare = overlapMs(window, browsing.spans) / len;
+      const lShare = overlapMs(window, lecture.spans) / len;
+      const mode: Mode = lShare >= SHARE_ON ? 'lecture' : bShare >= SHARE_ON ? 'browsing' : bShare + lShare <= SILENCE_SHARE ? 'silence' : 'mixed';
+      blocks.push({ date: d.date, tag: t.tag, mode, ratio: t.minutes ? actual / t.minutes : null, actual, late: d.slotLate.get(t.id) ?? null, delay: startDelayMinutes(t, timeZone) });
     }
   }
 
-  const byMode = (mode: Mode) => blocks.filter((b) => b.mode === mode);
-  const by_mode = { youtube: summarize(byMode('youtube')), silence: summarize(byMode('silence')), mixed: summarize(byMode('mixed')) };
+  const of = (mode: Mode, tag?: string) => blocks.filter((b) => b.mode === mode && (tag === undefined || b.tag === tag));
+  const by_mode = { silence: summarize(of('silence')), browsing: summarize(of('browsing')), lecture: summarize(of('lecture')), mixed: summarize(of('mixed')) };
 
-  const by_tag: Record<string, { youtube: ReturnType<typeof summarize>; silence: ReturnType<typeof summarize> }> = {};
+  const by_tag: Record<string, Record<string, ReturnType<typeof summarize>>> = {};
   const too_few: string[] = [];
   for (const tag of [...new Set(blocks.map((b) => b.tag))].sort()) {
-    const y = blocks.filter((b) => b.tag === tag && b.mode === 'youtube');
-    const s = blocks.filter((b) => b.tag === tag && b.mode === 'silence');
-    if (y.length >= MIN_PER_GROUP && s.length >= MIN_PER_GROUP) by_tag[tag] = { youtube: summarize(y), silence: summarize(s) };
-    else too_few.push(`${tag} (youtube ${y.length}, silence ${s.length})`);
+    const enough = MODES.filter((m) => of(m, tag).length >= MIN_PER_GROUP);
+    if (enough.length >= 2) by_tag[tag] = Object.fromEntries(enough.map((m) => [m, summarize(of(m, tag))]));
+    else too_few.push(`${tag} (${MODES.map((m) => `${m} ${of(m, tag).length}`).join(', ')})`);
   }
 
   // whole days: with YouTube on for a good part of the day, or not
@@ -144,16 +137,19 @@ export function computeMusicStats(all: Task[], sessions: GymSession[], timeZone:
   const quiet = perDay.filter((d) => d.youtube_min < 15 && d.planned > 0);
   const pct = (xs: typeof perDay) => (xs.length ? Math.round((100 * xs.reduce((n, d) => n + d.done, 0)) / xs.reduce((n, d) => n + d.planned, 0)) : null);
 
-  const closed = sessions.filter((s) => s.endedAt);
-  const minutes = closed.map((s) => Math.round((Date.parse(s.endedAt!) - Date.parse(s.startedAt)) / 60_000));
+  const closed = sessions.filter((x) => x.endedAt);
+  const minutes = closed.map((x) => Math.round((Date.parse(x.endedAt!) - Date.parse(x.startedAt)) / 60_000));
   return {
     window: { from, through, days },
     note:
-      'Blocks are grouped by how much of their running time (Start press to check-off) overlapped YouTube mode: "youtube" = at least 60%, "silence" = at most 10%, "mixed" = between. ' +
-      'It is an association: check which kinds of work land in each group (see by_tag) before reading a difference as an effect, and prefer an experiment.',
+      'Blocks are grouped by what overlapped their running time (Start press to check-off): "lecture" = at least 60% under YouTube lecture mode, "browsing" = at least 60% under YouTube browsing mode, ' +
+      '"silence" = at most 10% under either, "mixed" = anything between. A lecture is usually the study material itself (following along with a Calc 3 video), so a lecture block is not a distraction the way browsing can be: ' +
+      'compare lecture with silence on the same subject. It is an association: check which kinds of work land in each group (see by_tag) before reading a difference as an effect, and prefer an experiment.',
     sessions: {
       count: sessions.length,
-      open_now: open,
+      browsing: sessions.filter((x) => x.mode !== 'lecture').length,
+      lecture: sessions.filter((x) => x.mode === 'lecture').length,
+      open_now: browsing.open || lecture.open,
       median_minutes: median(minutes),
     },
     blocks_used: blocks.length,
@@ -163,9 +159,9 @@ export function computeMusicStats(all: Task[], sessions: GymSession[], timeZone:
     whole_days: {
       youtube_days: { days: heavy.length, done_pct: pct(heavy) },
       quiet_days: { days: quiet.length, done_pct: pct(quiet) },
-      note: 'youtube day = 60+ minutes of YouTube mode that planner day; quiet day = under 15 minutes. done_pct = planned work blocks checked off.',
+      note: 'youtube day = 60+ minutes of either YouTube mode that planner day; quiet day = under 15 minutes. done_pct = planned work blocks checked off.',
     },
-    recent_days: perDay.slice(-14).map((d) => ({ date: d.date, youtube_min: d.youtube_min, done: d.done, planned: d.planned })),
+    recent_days: perDay.slice(-14).map((d) => ({ date: d.date, browsing_min: d.browsing_min, lecture_min: d.lecture_min, done: d.done, planned: d.planned })),
   };
 }
 
@@ -175,7 +171,7 @@ const TOOLS = [
   {
     name: 'get_music_sessions',
     description:
-      'The stretches of YouTube mode he switched on with the pink printer button (date, start, end, minutes). `open: true` means it is on now or he forgot to switch it off. ' +
+      'The stretches of YouTube mode he switched on with the printer button (date, start, end, minutes, `mode`: browsing or lecture). `open: true` means it is on now or he forgot to switch it off. ' +
       'Optional `days` (default 14, max 90) looks back from today.',
     inputSchema: { type: 'object', properties: { days: { type: 'integer', minimum: 1, maximum: 90 } } },
     annotations: { readOnlyHint: true },
@@ -183,7 +179,7 @@ const TOOLS = [
   {
     name: 'get_music_stats',
     description:
-      'How his work blocks went with YouTube mode on versus in silence: per mode (and per subject where there are enough blocks) the median real time as a share of planned, ' +
+      'How his work blocks went in silence, with YouTube browsing on, and with a YouTube lecture on: per mode (and per subject where there are enough blocks) the median real time as a share of planned, ' +
       'median lateness, median start delay, plus whole days with lots of YouTube versus quiet days. It is an association, not proof. Optional `days` (default 28, max 90).',
     inputSchema: { type: 'object', properties: { days: { type: 'integer', minimum: 7, maximum: 90 } } },
     annotations: { readOnlyHint: true },
@@ -258,6 +254,7 @@ async function callMusicTool(name: string, args: Json, ctx: McpContext): Promise
           return {
             date: dateOf(start, timeZone),
             start: timeOf(start, timeZone),
+            mode: s.mode ?? 'browsing',
             end: s.endedAt ? timeOf(Date.parse(s.endedAt), timeZone) : null,
             minutes: s.endedAt ? Math.round((Date.parse(s.endedAt) - start) / 60_000) : null,
             open: s.endedAt === null,

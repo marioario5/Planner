@@ -220,9 +220,10 @@ class _PlannerScreenState extends State<PlannerScreen>
     if (mounted) setState(() {});
   }
 
+  /// The printer button steps through: pink (nothing) -> blue (YouTube browsing) -> green (YouTube lecture) -> pink.
   Future<void> _toggleMusic() async {
     HapticFeedback.selectionClick();
-    final done = _music.toggle();
+    final done = _music.advance(const ['browsing', 'lecture']);
     setState(() {}); // the button flips at once, before anything is sent
     await done;
     if (mounted) setState(() {});
@@ -581,7 +582,7 @@ class _PlannerScreenState extends State<PlannerScreen>
                   // Long-press the printer to change the server or
                   // disconnect — keeps the UI free of a settings button.
                   onLongPress: _showConnectDialog,
-                  // The printer's pink button toggles YouTube mode (the music experiment).
+                  // The printer's button steps through YouTube mode: pink (off), blue (browsing), green (lecture).
                   onTapUp: (d) {
                     if (hitsPinkButton(d.localPosition)) _toggleMusic();
                   },
@@ -589,7 +590,7 @@ class _PlannerScreenState extends State<PlannerScreen>
                     animation: _lightController,
                     builder: (_, __) => CustomPaint(
                       size: const Size(320, 108),
-                      painter: PrinterPainter(blinkPhase: _lightController.value, youtubeOn: _music.atGym),
+                      painter: PrinterPainter(blinkPhase: _lightController.value, musicMode: _music.mode),
                     ),
                   ),
                 ),

@@ -21,6 +21,8 @@ interface Step {
   script: string;
   tables?: string[];
   taskColumns?: string[];
+  /** Columns of other tables, `table.column`. */
+  otherColumns?: string[];
 }
 
 // Oldest first. The base schema (the `tasks` table with id/date/title/tag/done/position/created_at/completed_at) is db:init.
@@ -42,16 +44,18 @@ const STEPS: Step[] = [
   { migration: '0011_task_events', script: 'db:log:remote', tables: ['task_events'] },
   { migration: '0012_gym_sessions', script: 'db:gym:remote', tables: ['gym_sessions'] },
   { migration: '0013_music', script: 'db:music:remote', tables: ['music_sessions', 'music_experiments'] },
+  { migration: '0014_music_mode', script: 'db:musicmode:remote', otherColumns: ['music_sessions.mode'] },
 ];
 
 /** `tables` = every table in the database; `taskColumns` = every column of `tasks`. */
-export function checkSchema(tables: Set<string>, taskColumns: Set<string>): SchemaReport {
+export function checkSchema(tables: Set<string>, taskColumns: Set<string>, otherColumns: Set<string> = new Set()): SchemaReport {
   const missing: SchemaProblem[] = [];
   const scripts: string[] = [];
   for (const step of STEPS) {
     const gaps = [
       ...(step.tables ?? []).filter((t) => !tables.has(t)).map((t) => `table ${t}`),
       ...(step.taskColumns ?? []).filter((c) => !taskColumns.has(c)).map((c) => `column tasks.${c}`),
+      ...(step.otherColumns ?? []).filter((c) => !otherColumns.has(c) && tables.has(c.split('.')[0])).map((c) => `column ${c}`),
     ];
     for (const what of gaps) missing.push({ what, migration: step.migration, run: `npm run ${step.script}` });
     if (gaps.length > 0) scripts.push(`npm run ${step.script}`);

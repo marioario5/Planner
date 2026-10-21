@@ -142,7 +142,8 @@ export class MemoryTaskStore implements TaskStore {
     if (cur) {
       cur.startedAt = s.startedAt;
       cur.endedAt = s.endedAt ?? cur.endedAt;
-    } else this.music.push({ ...s });
+      cur.mode = s.mode ?? cur.mode;
+    } else this.music.push({ ...s, mode: s.mode ?? 'browsing' });
   }
 
   async listMusic(fromIso: string): Promise<GymSession[]> {

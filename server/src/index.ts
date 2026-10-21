@@ -7,7 +7,7 @@ import { handleMusicMcpPost } from './music';
 import { runningTask } from './running';
 import { slippingSection } from './slipping';
 import { parsePrefixes, reconcile, type SyncConfig } from './sync';
-import { ValidationError, parseGym, parsePatch, parseRating, type Task, type TaskStore } from './tasks';
+import { ValidationError, parseGym, parseMusic, parsePatch, parseRating, type Task, type TaskStore } from './tasks';
 
 export interface Env {
   DB: D1Database;
@@ -86,7 +86,7 @@ const apiView = (t: Task) => ({
  *   POST   /mcp/<token>    MCP endpoint for clients that can't send headers (claude.ai connectors)
  *   GET    /api/tasks?date=YYYY-MM-DD
  *   PATCH  /api/tasks/:id  {done?, started?, paused?, flagged?, title?, tag?, start?, minutes?, notes?, restoreStarted?, restoreCompleted?, restorePausedMs?}
- *   PUT    /api/music/:id  {started, ended?}  YouTube-mode switch (the music experiment; idempotent)
+ *   PUT    /api/music/:id  {started, ended?, mode?}  YouTube-mode switch (browsing | lecture) (the music experiment; idempotent)
  *   POST   /music/mcp[/<token>]  the music experiment's own MCP endpoint (MUSIC_TOKEN or API_TOKEN)
  *   PUT    /api/gym/:id    {started, ended?}  gym switch (idempotent; the id is made by the app)
  *   GET    /api/running    the task in progress (title, tag, planned minutes, worked time); READ_TOKEN may call only this
@@ -181,7 +181,7 @@ async function handleInner(
       const body = await request.json().catch(() => {
         throw new ValidationError('body must be JSON');
       });
-      const session = parseGym(decodeURIComponent(path.slice('/api/music/'.length)), body);
+      const session = parseMusic(decodeURIComponent(path.slice('/api/music/'.length)), body);
       await store.saveMusic(session);
       return json(session);
     }

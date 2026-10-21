@@ -113,7 +113,8 @@ CREATE TABLE IF NOT EXISTS music_sessions (
   id         TEXT PRIMARY KEY,
   started_at TEXT NOT NULL,
   ended_at   TEXT,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  mode       TEXT NOT NULL DEFAULT 'browsing'  -- browsing | lecture
 );
 
 CREATE TABLE IF NOT EXISTS music_experiments (
