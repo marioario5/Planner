@@ -176,3 +176,23 @@ describe('YouTube versus silence over finished blocks', () => {
     expect(bulkTickedIds([], 'America/Los_Angeles').size).toBe(0);
   });
 });
+
+describe('GET /api/music/current (so the phone and the website agree)', () => {
+  const get = (store: MemoryTaskStore, headers = planner) => handleRequest(new Request('https://x/api/music/current', { headers }), env, store, now);
+
+  it('is null when nothing is on, and shows the open stretch with its mode otherwise', async () => {
+    const store = new MemoryTaskStore();
+    expect(((await (await get(store)).json()) as any).current).toBeNull();
+    await store.saveMusic({ id: 'a', startedAt: '2026-10-21T01:00:00Z', endedAt: '2026-10-21T01:30:00Z', mode: 'browsing' });
+    expect(((await (await get(store)).json()) as any).current).toBeNull(); // the last one ended
+    await store.saveMusic({ id: 'b', startedAt: '2026-10-21T01:30:00Z', endedAt: null, mode: 'lecture' });
+    expect(((await (await get(store)).json()) as any).current).toEqual({ id: 'b', started: '2026-10-21T01:30:00Z', mode: 'lecture' });
+  });
+
+  it('needs the planner token, and "current" can not be written as a session id', async () => {
+    const store = new MemoryTaskStore();
+    expect((await get(store, music)).status).toBe(401);
+    const put = await handleRequest(new Request('https://x/api/music/current', { method: 'PUT', headers: planner, body: JSON.stringify({ started: '2026-10-20T22:00:00Z' }) }), env, store, now);
+    expect(put.status).toBe(405); // the path is reserved for reading
+  });
+});

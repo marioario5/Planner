@@ -11,6 +11,16 @@ import 'package:shared_preferences/shared_preferences.dart';
 ///
 /// Stored on the phone: the session in progress (`open`) and a list of sessions the server has not confirmed
 /// (`pending`). A finished session stays in `pending` until the server says it has it.
+/// What the server says is on right now. `reachable: false` means it could not be asked (offline), which says nothing about on or off.
+class RemoteState {
+  final bool reachable;
+  final String? id;
+  final DateTime? started;
+  final String? mode;
+  const RemoteState({required this.reachable, this.id, this.started, this.mode});
+  bool get isOn => id != null;
+}
+
 class GymTracker {
   /// Which switch this is: `gym` (the default) or `music`. It names the saved state, so the two never mix.
   final String name;
@@ -21,7 +31,10 @@ class GymTracker {
   final Future<bool> Function(String id, DateTime started, DateTime? ended, String? mode) send;
   final DateTime Function() clock;
 
-  GymTracker({required this.send, DateTime Function()? clock, this.name = 'gym'}) : clock = clock ?? DateTime.now;
+  /// Asks the server what is on right now (only the YouTube-mode switch has one; another device may have changed it).
+  final Future<RemoteState> Function()? fetchCurrent;
+
+  GymTracker({required this.send, DateTime Function()? clock, this.name = 'gym', this.fetchCurrent}) : clock = clock ?? DateTime.now;
 
   String? _openId;
   DateTime? _openStart;
@@ -124,6 +137,33 @@ class GymTracker {
     }
     await _save();
     await flush();
+  }
+
+  /// Sends what is waiting, then takes over what the server says is on, so a change made on another device shows here too.
+  /// Only when nothing here is waiting to be sent. Returns true if what this device shows changed.
+  Future<bool> sync() async {
+    await flush();
+    final ask = fetchCurrent;
+    if (ask == null || _pending.isNotEmpty) return false;
+    RemoteState remote;
+    try {
+      remote = await ask();
+    } catch (_) {
+      return false;
+    }
+    if (!remote.reachable) return false;
+    final before = '$_openId$_openMode';
+    if (remote.isOn) {
+      _openId = remote.id;
+      _openStart = remote.started;
+      _openMode = remote.mode;
+    } else {
+      _openId = null;
+      _openStart = null;
+      _openMode = null;
+    }
+    await _save();
+    return before != '$_openId$_openMode';
   }
 
   /// Sends everything the server has not confirmed. Failures are kept for the next try; never throws.

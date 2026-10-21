@@ -124,4 +124,39 @@ void main() {
       recorder.endRecording();
     }
   });
+
+  group('agreeing with the website (what the server says is on)', () {
+    late RemoteState remote;
+    GymTracker withRemote() => GymTracker(
+          name: 'music',
+          send: (id, s, e, m) async => online,
+          fetchCurrent: () async => remote,
+          clock: () => now,
+        );
+
+    test('takes over what another device switched on, and off', () async {
+      remote = RemoteState(reachable: true, id: 'w123', started: now, mode: 'lecture');
+      final m = withRemote();
+      expect(await m.sync(), isTrue);
+      expect(m.mode, 'lecture');
+      remote = const RemoteState(reachable: true);
+      expect(await m.sync(), isTrue);
+      expect(m.mode, isNull);
+    });
+
+    test('cannot reach the server: nothing changes; unsent changes of its own are never overwritten', () async {
+      remote = const RemoteState(reachable: false);
+      final m = withRemote();
+      online = false;
+      await m.advance(order); // turned on while offline
+      expect(await m.sync(), isFalse);
+      expect(m.mode, 'browsing');
+      online = true;
+      remote = const RemoteState(reachable: true); // the server has not heard yet
+      await m.flush();
+      remote = RemoteState(reachable: true, id: 'someone-elses', started: now, mode: 'lecture');
+      expect(await m.sync(), isTrue); // now nothing is waiting, so the server's state wins
+      expect(m.mode, 'lecture');
+    });
+  });
 }

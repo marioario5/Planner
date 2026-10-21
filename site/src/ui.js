@@ -6,6 +6,12 @@
   var cfg = window.__CFG;
   var api = createApi({ baseUrl: cfg.url, token: cfg.token, fetchImpl: function (u, i) { return fetch(u, i); } });
 
+  var music = createMusicTracker({
+    storage: (function () { try { return window.localStorage; } catch (e) { return { getItem: function () { return null; }, setItem: function () {} }; } })(),
+    send: api.putMusic,
+    fetchCurrent: api.getMusicCurrent,
+  });
+
   var state = {
     date: null,
     tasks: [],
@@ -587,7 +593,13 @@
   window.addEventListener('resize', setScale);
   startGrid();
   addDecorations();
-  startPrinter($('printer'));
+  startPrinter($('printer'), function () { return music.mode(); });
+  // the printer's button: pink (nothing) -> blue (YouTube browsing) -> green (YouTube lecture) -> pink
+  $('printer').addEventListener('click', function (e) {
+    var r = this.getBoundingClientRect();
+    if (hitsPinkButton(((e.clientX - r.left) * 320) / r.width, ((e.clientY - r.top) * 108) / r.height, 20)) music.advance(MUSIC_ORDER);
+  });
+  music.sync();
   document.addEventListener('pointermove', onMove, { passive: false });
   document.addEventListener('pointerup', function (e) { endDrag(e, false); });
   document.addEventListener('pointercancel', function (e) { endDrag(e, true); });
@@ -603,8 +615,8 @@
   }, 15000);
 
   // keep it in sync all the time: every 20 seconds, and whenever you come back to the tab
-  setInterval(function () { if (document.visibilityState === 'visible') refresh(false); }, 20000);
-  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') refresh(false); });
-  window.addEventListener('focus', function () { refresh(false); });
-  window.addEventListener('online', function () { refresh(false); });
+  setInterval(function () { if (document.visibilityState === 'visible') { refresh(false); music.sync(); } }, 20000);
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') { refresh(false); music.sync(); } });
+  window.addEventListener('focus', function () { refresh(false); music.sync(); });
+  window.addEventListener('online', function () { refresh(false); music.sync(); });
 })();

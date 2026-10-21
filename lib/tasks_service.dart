@@ -5,6 +5,7 @@ import 'package:flutter/foundation.dart' show debugPrint;
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'gym_tracker.dart' show RemoteState;
 import 'task_model.dart';
 
 /// Thrown with a message that is safe to show on screen.
@@ -220,6 +221,26 @@ class TasksService {
     } catch (e) {
       debugPrint('Music send error: $e');
       return false;
+    }
+  }
+
+  /// What YouTube mode is on right now, according to the server (it may have been changed from the website).
+  static Future<RemoteState> getMusicCurrent() async {
+    if (!isConfigured) return const RemoteState(reachable: false);
+    try {
+      final res = await http.get(Uri.parse('$_baseUrl/api/music/current'), headers: _headers).timeout(_timeout);
+      if (res.statusCode != 200) return const RemoteState(reachable: false);
+      final current = (jsonDecode(res.body) as Map<String, dynamic>)['current'] as Map<String, dynamic>?;
+      if (current == null) return const RemoteState(reachable: true);
+      return RemoteState(
+        reachable: true,
+        id: current['id'] as String,
+        started: DateTime.tryParse(current['started'] as String? ?? '')?.toLocal(),
+        mode: current['mode'] as String?,
+      );
+    } catch (e) {
+      debugPrint('Music state error: $e');
+      return const RemoteState(reachable: false);
     }
   }
 

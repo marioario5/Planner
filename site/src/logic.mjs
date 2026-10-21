@@ -350,5 +350,127 @@ export function createApi({ baseUrl, token, fetchImpl, timeoutMs = 15000 }) {
         return false;
       }
     },
+    /** Sends one YouTube-mode stretch (the music experiment). Safe to repeat: the server keeps it by id. True once the server has it. */
+    async putMusic(id, started, ended, mode) {
+      try {
+        const res = await call(`/api/music/${encodeURIComponent(id)}`, { method: 'PUT', body: JSON.stringify({ started, ended: ended || null, mode: mode || 'browsing' }) });
+        return res.status === 200;
+      } catch {
+        return false;
+      }
+    },
+    /** What YouTube mode is right now: { reachable, current: { id, started, mode } | null }. */
+    async getMusicCurrent() {
+      try {
+        const res = await call('/api/music/current');
+        if (res.status !== 200) return { reachable: false, current: null };
+        const body = await res.json();
+        return { reachable: true, current: body.current || null };
+      } catch {
+        return { reachable: false, current: null };
+      }
+    },
+  };
+}
+
+// ---- YouTube mode (the music experiment): the printer's button ----
+// Pink = nothing, blue = YouTube browsing (just watching videos), green = YouTube lecture (following along). Each tap steps to the next one.
+// It is recorded here first (so it works with no connection) and sent whenever the server can be reached; the same rules as the phone app.
+
+export const MUSIC_ORDER = ['browsing', 'lecture'];
+
+// the pink button on the 320 x 108 printer canvas, in canvas pixels
+export const PINK_BUTTON = { x: 24, y: 28, w: 28, h: 16 };
+
+export function hitsPinkButton(x, y, margin = 16) {
+  return x >= PINK_BUTTON.x - margin && x <= PINK_BUTTON.x + PINK_BUTTON.w + margin && y >= PINK_BUTTON.y - margin && y <= PINK_BUTTON.y + PINK_BUTTON.h + margin;
+}
+
+/**
+ * Keeps the YouTube-mode state on this device. `storage` is localStorage-like (getItem/setItem, may throw); `send(id, started, ended, mode)`
+ * resolves true once the server has the stretch; `fetchCurrent()` resolves { reachable, current } (what the server says is on right now).
+ */
+export function createMusicTracker({ storage, send, fetchCurrent, clock = () => new Date().toISOString() }) {
+  const KEY = 'planner-music';
+  let open = null; // { id, started, mode }
+  let pending = {}; // id -> { started, ended, mode }
+  let seq = 0;
+  let flushing = false;
+  try {
+    const saved = JSON.parse(storage.getItem(KEY) || 'null');
+    if (saved) {
+      open = saved.open || null;
+      pending = saved.pending || {};
+    }
+  } catch {
+    // nothing saved yet, or storage is blocked: start clean
+  }
+
+  function save() {
+    try {
+      storage.setItem(KEY, JSON.stringify({ open, pending }));
+    } catch {
+      // storage may be blocked; it still works until the page is closed
+    }
+  }
+  function start(now, mode) {
+    open = { id: 'w' + Date.parse(now) + '-' + seq++, started: now, mode };
+    pending[open.id] = { started: now, ended: null, mode };
+  }
+  function end(now) {
+    pending[open.id] = { started: open.started, ended: now, mode: open.mode };
+    open = null;
+  }
+
+  async function flush() {
+    if (flushing) return;
+    flushing = true;
+    try {
+      for (const id of Object.keys(pending)) {
+        const sent = pending[id];
+        let ok = false;
+        try {
+          ok = await send(id, sent.started, sent.ended, sent.mode);
+        } catch {
+          ok = false;
+        }
+        if (!ok) break; // no connection: the rest would fail too
+        // if it changed while sending (it was switched off mid-flight), keep it for another send
+        if (pending[id] && pending[id].ended === sent.ended) delete pending[id];
+      }
+      save();
+    } finally {
+      flushing = false;
+    }
+  }
+
+  return {
+    /** The mode on right now, or null when off. */
+    mode: () => (open ? open.mode : null),
+    unsynced: () => Object.keys(pending).length,
+    /** Steps off -> order[0] -> order[1] -> ... -> off. Changing mode ends one stretch and starts the next at the same instant. */
+    async advance(order = MUSIC_ORDER) {
+      const now = clock();
+      if (!open) start(now, order[0]);
+      else {
+        const next = order.indexOf(open.mode) + 1;
+        end(now);
+        if (next < order.length) start(now, order[next]);
+      }
+      save();
+      await flush();
+    },
+    flush,
+    /** Takes over what the server says is on (another device may have changed it), but only when nothing here is waiting to be sent. */
+    async sync() {
+      await flush();
+      if (Object.keys(pending).length > 0) return false;
+      const remote = await fetchCurrent();
+      if (!remote || !remote.reachable) return false;
+      const before = open ? open.id + open.mode : '';
+      open = remote.current ? { id: remote.current.id, started: remote.current.started, mode: remote.current.mode } : null;
+      save();
+      return before !== (open ? open.id + open.mode : '');
+    },
   };
 }

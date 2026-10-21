@@ -1,11 +1,11 @@
 // Port of lib/printer_painter.dart: an 80 x 27 pixel-art printer, four canvas pixels per printer pixel, with blinking lights.
 // Shared by the locked search page and the planner (build.mjs inlines it into both), so it uses no imports or modules.
 
-function startPrinter(canvas) {
+function startPrinter(canvas, getMusicMode) {
   if (!canvas || !canvas.getContext) return;
   var ctx = canvas.getContext('2d');
   var P = 4;
-  var C = { darkest: '#1a0d00', dark: '#2e1a08', body: '#4A3728', base: '#6B5040', light: '#8C6B52', tan: '#b89070', slot: '#0d0600', paper: '#FFF8EE', rose: '#E8A0A0', rosehi: '#f0c0c0', rosedark: '#a06060', sage: '#8BAF7C', amber: '#D4A843', red: '#c97a7a' };
+  var C = { darkest: '#1a0d00', dark: '#2e1a08', body: '#4A3728', base: '#6B5040', light: '#8C6B52', tan: '#b89070', slot: '#0d0600', paper: '#FFF8EE', rose: '#E8A0A0', rosehi: '#f0c0c0', rosedark: '#a06060', sage: '#8BAF7C', amber: '#D4A843', red: '#c97a7a', blue: '#6C8EBF', bluehi: '#9DB8DC', bluedark: '#4A6791', green: '#8BAF7C', greenhi: '#B3CDA6', greendark: '#5E7E52' };
   function px(x, y, color, w, hh) { ctx.fillStyle = color; ctx.fillRect(x * P, y * P, (w || 1) * P, (hh || 1) * P); }
   function draw(phase) {
     ctx.clearRect(0, 0, 320, 108);
@@ -19,15 +19,21 @@ function startPrinter(canvas) {
     for (col = 62; col < 75; col++) { px(col, 24, C.body); px(col, 25, C.dark); px(col, 26, C.darkest); }
     for (col = 24; col < 56; col++) { px(col, 20, C.slot); px(col, 21, C.paper); px(col, 22, C.dark); }
     px(23, 20, C.dark); px(56, 20, C.dark); px(23, 21, C.dark); px(56, 21, C.dark);
+    var mode = getMusicMode ? getMusicMode() : null;
+    var on = mode !== null && mode !== undefined;
+    var face = mode === 'lecture' ? C.green : mode === 'browsing' ? C.blue : C.rose;
+    var lit = mode === 'lecture' ? C.greenhi : mode === 'browsing' ? C.bluehi : C.rosehi;
+    var shadow = mode === 'lecture' ? C.greendark : mode === 'browsing' ? C.bluedark : C.rosedark;
     var bx, by;
     for (bx = 6; bx < 13; bx++) {
       for (by = 7; by < 11; by++) {
-        var shade = C.rose;
-        if (bx === 6 || by === 7) shade = C.rosehi;
-        if (bx === 12 || by === 10) shade = C.rosedark;
+        var shade = face;
+        if (bx === 6 || by === 7) shade = on ? shadow : lit;
+        if (bx === 12 || by === 10) shade = on ? lit : shadow;
         px(bx, by, shade);
       }
     }
+    if (on) px(9, 8, C.dark, 2, 2);
     for (var v = 0; v < 3; v++) {
       var vy = 7 + v * 3;
       for (col = 16; col < 26; col++) { px(col, vy, C.dark); px(col, vy + 1, C.body); }

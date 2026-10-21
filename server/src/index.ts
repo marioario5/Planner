@@ -87,6 +87,7 @@ const apiView = (t: Task) => ({
  *   GET    /api/tasks?date=YYYY-MM-DD
  *   PATCH  /api/tasks/:id  {done?, started?, paused?, flagged?, title?, tag?, start?, minutes?, notes?, restoreStarted?, restoreCompleted?, restorePausedMs?}
  *   PUT    /api/music/:id  {started, ended?, mode?}  YouTube-mode switch (browsing | lecture) (the music experiment; idempotent)
+ *   GET    /api/music/current  whether YouTube mode is on right now ({current: {id, started, mode} | null})
  *   POST   /music/mcp[/<token>]  the music experiment's own MCP endpoint (MUSIC_TOKEN or API_TOKEN)
  *   PUT    /api/gym/:id    {started, ended?}  gym switch (idempotent; the id is made by the app)
  *   GET    /api/running    the task in progress (title, tag, planned minutes, worked time); READ_TOKEN may call only this
@@ -176,12 +177,26 @@ async function handleInner(
 
     if (!(await bearerMatches(request, env.API_TOKEN))) return unauthorized();
 
+    if (path === '/api/music/current') {
+      // What YouTube mode is right now, so the phone app and the website show the same state.
+      if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405);
+      const nowDate = now ?? new Date();
+      const recent = await store.listMusic(new Date(nowDate.getTime() - 3 * 86_400_000).toISOString());
+      const latest = recent[recent.length - 1];
+      return json({
+        now: nowDate.toISOString(),
+        current: latest && latest.endedAt === null ? { id: latest.id, started: latest.startedAt, mode: latest.mode ?? 'browsing' } : null,
+      });
+    }
+
     if (path.startsWith('/api/music/')) {
       if (request.method !== 'PUT') return json({ error: 'method not allowed' }, 405);
       const body = await request.json().catch(() => {
         throw new ValidationError('body must be JSON');
       });
-      const session = parseMusic(decodeURIComponent(path.slice('/api/music/'.length)), body);
+      const musicId = decodeURIComponent(path.slice('/api/music/'.length));
+      if (musicId === 'current') throw new ValidationError('that id is reserved');
+      const session = parseMusic(musicId, body);
       await store.saveMusic(session);
       return json(session);
     }

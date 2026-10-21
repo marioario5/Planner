@@ -140,7 +140,7 @@ class _PlannerScreenState extends State<PlannerScreen>
 
   final GymTracker _gym = GymTracker(send: TasksService.putGym);
   // The music experiment: the printer's pink button toggles YouTube mode. Recorded like the gym switch, offline first.
-  final GymTracker _music = GymTracker(name: 'music', send: TasksService.putMusic);
+  final GymTracker _music = GymTracker(name: 'music', send: TasksService.putMusic, fetchCurrent: TasksService.getMusicCurrent);
   Timer? _gymTimer; // once a minute: refresh the elapsed time and retry anything unsent
 
   late AnimationController _lightController;
@@ -181,7 +181,7 @@ class _PlannerScreenState extends State<PlannerScreen>
     _startUp();
     _gymTimer = Timer.periodic(const Duration(minutes: 1), (_) async {
       await _gym.flush();
-      await _music.flush();
+      await _music.sync();
       if (mounted) setState(() {});
     });
     _loadVerse();
@@ -194,7 +194,7 @@ class _PlannerScreenState extends State<PlannerScreen>
     await _music.load();
     if (mounted) setState(() {});
     await _gym.flush(); // anything recorded while offline last time
-    await _music.flush();
+    await _music.sync();
     if (mounted) setState(() {});
   }
 
@@ -206,7 +206,7 @@ class _PlannerScreenState extends State<PlannerScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _gym.flush().then((_) => _music.flush()).then((_) {
+      _gym.flush().then((_) => _music.sync()).then((_) {
         if (mounted) setState(() {});
       });
     }
