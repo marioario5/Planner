@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { checkSchema } from '../src/schema-check';
 
 const ALL_TABLES = [
-  'tasks', 'day_info', 'habit_notes', 'commitments', 'framework_log', 'framework_meta', 'user_notes', 'day_ratings', 'experiments', 'task_events', 'gym_sessions',
+  'tasks', 'day_info', 'habit_notes', 'commitments', 'framework_log', 'framework_meta', 'user_notes', 'day_ratings', 'experiments', 'task_events', 'gym_sessions', 'music_sessions', 'music_experiments',
 ];
 const ALL_COLUMNS = [
   'id', 'date', 'title', 'tag', 'done', 'position', 'created_at', 'completed_at', 'start_time', 'minutes', 'notes', 'site_key', 'done_at', 'plan',

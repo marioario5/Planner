@@ -556,7 +556,7 @@ export interface McpContext {
   sync?: SyncConfig;
 }
 
-type Json = Record<string, unknown>;
+export type Json = Record<string, unknown>;
 
 /** YYYY-MM-DD of an ISO time in the planner time zone. */
 const localDate = (iso: string, timeZone: string): string =>
@@ -968,7 +968,22 @@ async function habits(args: Json, ctx: McpContext): Promise<Json> {
 const MAX_RUNNING_EXPERIMENTS = 3;
 const MAX_CLOSED_EXPERIMENTS_KEPT = 10;
 
-async function setExperiments(args: Json, ctx: McpContext): Promise<Json> {
+/** Where a set of experiments is kept: the planner's own, or the music experiment's. */
+export interface ExperimentIO {
+  list(): Promise<Experiment[]>;
+  save(e: Experiment): Promise<void>;
+  remove(id: string): Promise<boolean>;
+}
+
+export async function setExperiments(
+  args: Json,
+  ctx: McpContext,
+  io: ExperimentIO = {
+    list: () => ctx.store.listExperiments(),
+    save: (e) => ctx.store.saveExperiment(e),
+    remove: (id) => ctx.store.deleteExperiment(id),
+  },
+): Promise<Json> {
   const { store, now, timeZone } = ctx;
   if (!Array.isArray(args.experiments)) throw new ValidationError('experiments must be an array');
   if (args.experiments.length > 10) throw new ValidationError('at most 10 experiments per call');
@@ -983,7 +998,7 @@ async function setExperiments(args: Json, ctx: McpContext): Promise<Json> {
     return v.trim();
   };
 
-  const merged = new Map((await store.listExperiments()).map((e) => [e.id, e]));
+  const merged = new Map((await io.list()).map((e) => [e.id, e]));
   const touched = new Map<string, Experiment>();
   for (const raw of args.experiments) {
     if (typeof raw !== 'object' || raw === null) throw new ValidationError('each experiment must be an object with an id');
@@ -1024,9 +1039,9 @@ async function setExperiments(args: Json, ctx: McpContext): Promise<Json> {
   if (running > MAX_RUNNING_EXPERIMENTS) {
     throw new ValidationError(`that would leave ${running} running experiments; keep at most ${MAX_RUNNING_EXPERIMENTS} (change one thing at a time)`);
   }
-  for (const e of touched.values()) await store.saveExperiment(e);
+  for (const e of touched.values()) await io.save(e);
   const closed = [...merged.values()].filter((e) => e.status !== 'running').sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : -1));
-  for (const e of closed.slice(MAX_CLOSED_EXPERIMENTS_KEPT)) await store.deleteExperiment(e.id);
+  for (const e of closed.slice(MAX_CLOSED_EXPERIMENTS_KEPT)) await io.remove(e.id);
   return { saved: touched.size, running };
 }
 

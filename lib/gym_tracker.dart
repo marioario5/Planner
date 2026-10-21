@@ -2,21 +2,23 @@ import 'dart:convert';
 
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// The gym switch. Pressing it records the time on the phone first (so it works with no signal), and every
+/// An on/off switch that records stretches of time (the gym switch, and the printer's pink YouTube-mode button). Pressing it records the time on the phone first (so it works with no signal), and every
 /// recorded session is sent to the server whenever a connection allows. Sending is safe to repeat: the server
 /// keys each session by the id made here.
 ///
 /// Stored on the phone: the session in progress (`open`) and a list of sessions the server has not confirmed
 /// (`pending`). A finished session stays in `pending` until the server says it has it.
 class GymTracker {
-  static const _openKey = 'gym_open';
-  static const _pendingKey = 'gym_pending';
+  /// Which switch this is: `gym` (the default) or `music`. It names the saved state, so the two never mix.
+  final String name;
+  String get _openKey => '${name}_open';
+  String get _pendingKey => '${name}_pending';
 
   /// Sends one session; returns true only when the server confirmed it.
   final Future<bool> Function(String id, DateTime started, DateTime? ended) send;
   final DateTime Function() clock;
 
-  GymTracker({required this.send, DateTime Function()? clock}) : clock = clock ?? DateTime.now;
+  GymTracker({required this.send, DateTime Function()? clock, this.name = 'gym'}) : clock = clock ?? DateTime.now;
 
   String? _openId;
   DateTime? _openStart;
@@ -73,7 +75,7 @@ class GymTracker {
   Future<void> toggle() async {
     final now = clock();
     if (_openId == null) {
-      _openId = 'g${now.toUtc().millisecondsSinceEpoch}';
+      _openId = '${name.substring(0, 1)}${now.toUtc().millisecondsSinceEpoch}';
       _openStart = now;
       _pending[_openId!] = [now, null];
     } else {

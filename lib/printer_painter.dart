@@ -3,8 +3,10 @@ import 'package:flutter/material.dart';
 /// Paints the pixel-art printer faithful to the HTML canvas version.
 class PrinterPainter extends CustomPainter {
   final double blinkPhase; // 0.0–1.0 drives light animations
+  /// YouTube mode: the pink button looks pressed in, with a small dark dot, while it is on.
+  final bool youtubeOn;
 
-  PrinterPainter({required this.blinkPhase});
+  PrinterPainter({required this.blinkPhase, this.youtubeOn = false});
 
   static const double P = 4.0; // pixel size
 
@@ -79,15 +81,16 @@ class PrinterPainter extends CustomPainter {
     px(canvas, 23, 20, dark); px(canvas, 56, 20, dark);
     px(canvas, 23, 21, dark); px(canvas, 56, 21, dark);
 
-    // Rose button
+    // Rose button (also the YouTube-mode switch: pressed in, with a dark dot, while it is on)
     for (int bx = 6; bx < 13; bx++) {
       for (int by = 7; by < 11; by++) {
-        Color shade = rose;
-        if (bx == 6 || by == 7) shade = rosehi;
-        if (bx == 12 || by == 10) shade = rosedark;
+        Color shade = youtubeOn ? rosehi : rose;
+        if (bx == 6 || by == 7) shade = youtubeOn ? rosedark : rosehi;
+        if (bx == 12 || by == 10) shade = youtubeOn ? rosehi : rosedark;
         px(canvas, bx, by, shade);
       }
     }
+    if (youtubeOn) px(canvas, 9, 8, dark, w: 2, h: 2);
 
     // Vents
     for (int v = 0; v < 3; v++) {
@@ -137,3 +140,9 @@ class PrinterPainter extends CustomPainter {
   @override
   bool shouldRepaint(PrinterPainter old) => old.blinkPhase != blinkPhase;
 }
+
+/// Where the pink button sits on the 320x108 printer, in pixels (6..13 by 7..11 grid cells of 4 px).
+const Rect printerPinkButton = Rect.fromLTWH(24, 28, 28, 16);
+
+/// True when a tap at [p] (relative to the printer) is on the pink button. The target is bigger than the button, since it is small.
+bool hitsPinkButton(Offset p) => printerPinkButton.inflate(12).contains(p);

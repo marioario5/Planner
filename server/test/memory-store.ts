@@ -134,6 +134,37 @@ export class MemoryTaskStore implements TaskStore {
     return this.events.slice(0, limit);
   }
 
+  music: GymSession[] = [];
+  musicExperiments: Experiment[] = [];
+
+  async saveMusic(s: GymSession): Promise<void> {
+    const cur = this.music.find((g) => g.id === s.id);
+    if (cur) {
+      cur.startedAt = s.startedAt;
+      cur.endedAt = s.endedAt ?? cur.endedAt;
+    } else this.music.push({ ...s });
+  }
+
+  async listMusic(fromIso: string): Promise<GymSession[]> {
+    return this.music.filter((g) => g.startedAt >= fromIso).sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+  }
+
+  async listMusicExperiments(): Promise<Experiment[]> {
+    return [...this.musicExperiments].sort((a, b) => (a.startedOn < b.startedOn ? 1 : a.startedOn > b.startedOn ? -1 : a.id.localeCompare(b.id)));
+  }
+
+  async saveMusicExperiment(e: Experiment): Promise<void> {
+    const i = this.musicExperiments.findIndex((x) => x.id === e.id);
+    if (i >= 0) this.musicExperiments[i] = { ...e };
+    else this.musicExperiments.push({ ...e });
+  }
+
+  async deleteMusicExperiment(id: string): Promise<boolean> {
+    const n = this.musicExperiments.length;
+    this.musicExperiments = this.musicExperiments.filter((x) => x.id !== id);
+    return this.musicExperiments.length < n;
+  }
+
   gym: GymSession[] = [];
 
   async saveGym(s: GymSession): Promise<void> {

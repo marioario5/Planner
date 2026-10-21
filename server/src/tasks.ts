@@ -236,6 +236,12 @@ export interface TaskStore {
   saveGym(s: GymSession): Promise<void>;
   /** Sessions that started at or after `fromIso`, oldest first. */
   listGym(fromIso: string): Promise<GymSession[]>;
+  /** The music experiment's YouTube-mode stretches (same shape as gym sessions; kept apart from everything the planner reads). */
+  saveMusic(s: GymSession): Promise<void>;
+  listMusic(fromIso: string): Promise<GymSession[]>;
+  listMusicExperiments(): Promise<Experiment[]>;
+  saveMusicExperiment(e: Experiment): Promise<void>;
+  deleteMusicExperiment(id: string): Promise<boolean>;
   /** Applies a check-off that came from the progress site, keeping the site's timestamp. */
   setDoneFromSite(id: string, done: boolean, atMs: number): Promise<void>;
   listUserNotes(): Promise<UserNote[]>;

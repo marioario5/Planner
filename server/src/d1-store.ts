@@ -326,6 +326,72 @@ export class D1TaskStore implements TaskStore {
     }
   }
 
+  async saveMusic(s: GymSession): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO music_sessions (id, started_at, ended_at, updated_at) VALUES (?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET started_at = excluded.started_at,
+           ended_at = COALESCE(excluded.ended_at, music_sessions.ended_at), updated_at = excluded.updated_at`,
+      )
+      .bind(s.id, s.startedAt, s.endedAt, new Date().toISOString())
+      .run();
+  }
+
+  async listMusic(fromIso: string): Promise<GymSession[]> {
+    try {
+      const { results } = await this.db
+        .prepare('SELECT id, started_at, ended_at FROM music_sessions WHERE started_at >= ? ORDER BY started_at')
+        .bind(fromIso)
+        .all<{ id: string; started_at: string; ended_at: string | null }>();
+      return results.map((r) => ({ id: r.id, startedAt: r.started_at, endedAt: r.ended_at }));
+    } catch {
+      return []; // table not migrated yet
+    }
+  }
+
+  async listMusicExperiments(): Promise<Experiment[]> {
+    try {
+      const { results } = await this.db
+        .prepare('SELECT * FROM music_experiments ORDER BY started_on DESC, id')
+        .all<{
+          id: string; title: string; change: string; measure: string; tag: string | null; started_on: string;
+          status: string; result: string | null; updated_at: string;
+        }>();
+      return results.map((r) => ({
+        id: r.id,
+        title: r.title,
+        change: r.change,
+        measure: r.measure as ExperimentMeasure,
+        tag: (r.tag === null ? null : normalizeTag(r.tag)) as Tag | null,
+        startedOn: r.started_on,
+        status: r.status as ExperimentStatus,
+        result: r.result,
+        updatedAt: r.updated_at,
+      }));
+    } catch {
+      return []; // table not migrated yet
+    }
+  }
+
+  async saveMusicExperiment(e: Experiment): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO music_experiments (id, title, change, measure, tag, started_on, status, result, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET
+           title = excluded.title, change = excluded.change, measure = excluded.measure, tag = excluded.tag,
+           started_on = excluded.started_on, status = excluded.status, result = excluded.result,
+           updated_at = excluded.updated_at`,
+      )
+      .bind(e.id, e.title, e.change, e.measure, e.tag, e.startedOn, e.status, e.result, e.updatedAt)
+      .run();
+  }
+
+  async deleteMusicExperiment(id: string): Promise<boolean> {
+    const result = await this.db.prepare('DELETE FROM music_experiments WHERE id = ?').bind(id).run();
+    return result.meta.changes > 0;
+  }
+
   async setDoneFromSite(id: string, done: boolean, atMs: number): Promise<void> {
     // Finishing ends an open pause at the finish time; unticking starts the task over.
     const cur = done ? await this.get(id) : null;

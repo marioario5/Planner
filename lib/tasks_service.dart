@@ -200,6 +200,28 @@ class TasksService {
     }
   }
 
+  /// Sends one YouTube-mode stretch (the music experiment). Same rules as [putGym]: safe to repeat, true once the server has it.
+  static Future<bool> putMusic(String id, DateTime started, DateTime? ended) async {
+    if (!isConfigured) return false;
+
+    try {
+      final res = await http
+          .put(
+            Uri.parse('$_baseUrl/api/music/${Uri.encodeComponent(id)}'),
+            headers: _headers,
+            body: jsonEncode({
+              'started': started.toUtc().toIso8601String(),
+              'ended': ended?.toUtc().toIso8601String(),
+            }),
+          )
+          .timeout(_timeout);
+      return res.statusCode == 200;
+    } catch (e) {
+      debugPrint('Music send error: $e');
+      return false;
+    }
+  }
+
   /// How today felt, 1 to 5; null clears it.
   static Future<bool> setRating(int? rating) async {
     if (!isConfigured) return false;

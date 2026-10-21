@@ -139,6 +139,8 @@ class _PlannerScreenState extends State<PlannerScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
 
   final GymTracker _gym = GymTracker(send: TasksService.putGym);
+  // The music experiment: the printer's pink button toggles YouTube mode. Recorded like the gym switch, offline first.
+  final GymTracker _music = GymTracker(name: 'music', send: TasksService.putMusic);
   Timer? _gymTimer; // once a minute: refresh the elapsed time and retry anything unsent
 
   late AnimationController _lightController;
@@ -179,6 +181,7 @@ class _PlannerScreenState extends State<PlannerScreen>
     _startUp();
     _gymTimer = Timer.periodic(const Duration(minutes: 1), (_) async {
       await _gym.flush();
+      await _music.flush();
       if (mounted) setState(() {});
     });
     _loadVerse();
@@ -188,8 +191,10 @@ class _PlannerScreenState extends State<PlannerScreen>
   Future<void> _startUp() async {
     await _loadConnection();
     await _gym.load();
+    await _music.load();
     if (mounted) setState(() {});
     await _gym.flush(); // anything recorded while offline last time
+    await _music.flush();
     if (mounted) setState(() {});
   }
 
@@ -201,7 +206,7 @@ class _PlannerScreenState extends State<PlannerScreen>
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
-      _gym.flush().then((_) {
+      _gym.flush().then((_) => _music.flush()).then((_) {
         if (mounted) setState(() {});
       });
     }
@@ -211,6 +216,14 @@ class _PlannerScreenState extends State<PlannerScreen>
     HapticFeedback.mediumImpact();
     final done = _gym.toggle();
     setState(() {}); // the switch flips at once, before anything is sent
+    await done;
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _toggleMusic() async {
+    HapticFeedback.selectionClick();
+    final done = _music.toggle();
+    setState(() {}); // the button flips at once, before anything is sent
     await done;
     if (mounted) setState(() {});
   }
@@ -568,11 +581,15 @@ class _PlannerScreenState extends State<PlannerScreen>
                   // Long-press the printer to change the server or
                   // disconnect — keeps the UI free of a settings button.
                   onLongPress: _showConnectDialog,
+                  // The printer's pink button toggles YouTube mode (the music experiment).
+                  onTapUp: (d) {
+                    if (hitsPinkButton(d.localPosition)) _toggleMusic();
+                  },
                   child: AnimatedBuilder(
                     animation: _lightController,
                     builder: (_, __) => CustomPaint(
                       size: const Size(320, 108),
-                      painter: PrinterPainter(blinkPhase: _lightController.value),
+                      painter: PrinterPainter(blinkPhase: _lightController.value, youtubeOn: _music.atGym),
                     ),
                   ),
                 ),

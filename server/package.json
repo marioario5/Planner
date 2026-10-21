@@ -32,7 +32,9 @@
     "db:log:local": "wrangler d1 execute cozy-planner --local --file=migrations/0011_task_events.sql",
     "db:log:remote": "wrangler d1 execute cozy-planner --remote --file=migrations/0011_task_events.sql",
     "db:gym:local": "wrangler d1 execute cozy-planner --local --file=migrations/0012_gym_sessions.sql",
-    "db:gym:remote": "wrangler d1 execute cozy-planner --remote --file=migrations/0012_gym_sessions.sql"
+    "db:gym:remote": "wrangler d1 execute cozy-planner --remote --file=migrations/0012_gym_sessions.sql",
+    "db:music:local": "wrangler d1 execute cozy-planner --local --file=migrations/0013_music.sql",
+    "db:music:remote": "wrangler d1 execute cozy-planner --remote --file=migrations/0013_music.sql"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261002.1",

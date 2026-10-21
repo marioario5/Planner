@@ -108,3 +108,22 @@ CREATE TABLE IF NOT EXISTS gym_sessions (
   ended_at   TEXT,
   updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS music_sessions (
+  id         TEXT PRIMARY KEY,
+  started_at TEXT NOT NULL,
+  ended_at   TEXT,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS music_experiments (
+  id         TEXT PRIMARY KEY,
+  title      TEXT NOT NULL,
+  change     TEXT NOT NULL,
+  measure    TEXT NOT NULL,
+  tag        TEXT,
+  started_on TEXT NOT NULL,
+  status     TEXT NOT NULL DEFAULT 'running',
+  result     TEXT,
+  updated_at TEXT NOT NULL
+);

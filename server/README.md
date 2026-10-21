@@ -256,3 +256,11 @@ The phone app has a gym switch (start/stop). It records the time on the phone fi
 ## Running task (for a display)
 
 `GET /api/running` returns the task in progress (Start pressed, not finished) for today's planner day: `{now, planner_date, running: {id, title, tag, planned_min, started_at, paused, paused_at, paused_sec, elapsed_sec} | null, day: {plan, done, total}}`. No notes, nothing personal. `elapsed_sec` is worked time at `now` (since Start, minus every pause, an open pause counted up to now); a client can keep counting from it locally. Send `Authorization: Bearer <token>`. Besides `API_TOKEN`, an optional second secret `READ_TOKEN` (`wrangler secret put READ_TOKEN`, at least 16 characters) is accepted for this one endpoint and nothing else, so a wall display never holds a token that can change anything.
+
+## Music experiment (kept apart from the planner)
+
+A separate experiment: is he more or less productive with YouTube on than in silence? The pink button on the printer in the phone app toggles **YouTube mode** (it looks pressed in while on). Each stretch is recorded on the phone first and sent when there is a connection (`PUT /api/music/:id` with `{started, ended?}`, safe to repeat), exactly like the gym switch.
+
+It has its own MCP endpoint, `POST /music/mcp` (or `/music/mcp/<token>` for connectors that can't send headers), with its own tools: `get_music_sessions`, `get_music_stats` (his finished work blocks grouped by how much of them overlapped YouTube mode: real time against planned, lateness, start delay, by subject, plus whole days with lots of YouTube versus quiet days), `get_music_experiments` and `set_music_experiments` (the same before/after machinery as the planner's experiments, in their own table). The planner's tools never return any of this and the planning run never calls the endpoint.
+
+Tokens: `MUSIC_TOKEN` (optional secret, `wrangler secret put MUSIC_TOKEN`) opens only `/music/mcp`; `API_TOKEN` also works there. Needs migration `0013_music` (`npm run db:music:remote`); `get_server_status` lists it if missing.
