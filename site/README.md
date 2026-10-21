@@ -44,26 +44,19 @@ Rebuild whenever you change the password, the server address or the token, or wh
 
 ### The short way
 
-Set the address and token once as Windows user environment variables (they are read by the build; the password still has to be typed):
-
-```powershell
-setx SITE_URL "https://<your-worker>.workers.dev"
-setx SITE_TOKEN "<your API token>"
-```
-
-To not type the password either, save it the same way (it then lives in your Windows account's settings on this computer only, never in the repo):
-
-```powershell
-setx SITE_PASSWORD "<the site password>"
-```
-
-Open a new terminal, then from `server/`:
+Save the three values once in a private file on this computer (`.site-local.env` at the top of the repo; git ignores it, so it is never committed):
 
 ```bash
-npm run site:publish
+cd server && npm run site:setup      # asks for the server address, the API token and the password (typing is hidden)
 ```
 
-With all three set it asks for nothing: it rebuilds, commits just `docs/` and pushes. The build prints the password's length (this computer only) so you can check the saved one is what you expect. If nothing changed it says so and stops. If you change the password, run `setx` again.
+Then, any time:
+
+```bash
+cd server && npm run site:publish    # rebuilds, commits only docs/, pushes; asks for nothing
+```
+
+The build prints the token's and the password's lengths (this computer only) so you can check what is saved. Run `site:setup` again to change a value (Enter keeps the saved one). Environment variables (`SITE_URL`, `SITE_TOKEN`, `SITE_PASSWORD`) still override the file. If the file is missing a value, the build simply asks for it. The password sits in that file in plain text, on this computer only; leave it blank in the setup and it is asked each time instead.
 
 ### The automatic way (GitHub Action)
 

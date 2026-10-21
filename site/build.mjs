@@ -6,55 +6,18 @@
 //   - the planner server address (your Worker, https://...workers.dev)
 //   - the planner API token (the same one the phone app uses)
 //   - the password that unlocks the site (typed into the search box)
-// You can also provide them as SITE_URL, SITE_TOKEN and SITE_PASSWORD environment variables.
+// You can also provide them as SITE_URL, SITE_TOKEN and SITE_PASSWORD environment variables, or save them once in the private file
+// .site-local.env at the top of the repo (never committed) with: cd server && npm run site:setup
 // Before writing anything it checks that the server really accepts the token.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
-import { createInterface } from 'node:readline';
 import { fileURLToPath } from 'node:url';
+import { askHidden, askVisible } from './ask.mjs';
 import { buildSite } from './build-lib.mjs';
+import { LOCAL_CONFIG_PATH, loadLocalConfig } from './localconfig.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
-
-function askVisible(question) {
-  return new Promise((resolve) => {
-    const rl = createInterface({ input: process.stdin, output: process.stdout });
-    rl.question(question, (answer) => {
-      rl.close();
-      resolve(answer);
-    });
-  });
-}
-
-/** Reads a secret without showing it. Works with paste: it stops at the first Enter and ignores anything after it. */
-function askHidden(question) {
-  if (!process.stdin.isTTY) return askVisible(question);
-  return new Promise((resolve) => {
-    const stdin = process.stdin;
-    process.stdout.write(question);
-    stdin.setRawMode(true);
-    stdin.resume();
-    stdin.setEncoding('utf8');
-    let value = '';
-    const finish = () => {
-      stdin.setRawMode(false);
-      stdin.pause();
-      stdin.removeListener('data', onData);
-      process.stdout.write('\n');
-      resolve(value);
-    };
-    const onData = (chunk) => {
-      for (const ch of chunk) {
-        if (ch === '\r' || ch === '\n') return finish();
-        if (ch === '\u0003') process.exit(130); // Ctrl+C
-        if (ch === '\u007f' || ch === '\b') value = value.slice(0, -1);
-        else if (ch >= ' ') value += ch;
-      }
-    };
-    stdin.on('data', onData);
-  });
-}
 
 async function checkServer(url, token) {
   try {
@@ -67,9 +30,11 @@ async function checkServer(url, token) {
   }
 }
 
-const url = (process.env.SITE_URL || (await askVisible('Planner server address (https://...): '))).trim();
-const token = (process.env.SITE_TOKEN || (await askHidden('Planner API token: '))).trim();
-const password = process.env.SITE_PASSWORD ?? (await askHidden('Site password: '));
+// Where each value comes from, in order: an environment variable, then the private file <repo>/.site-local.env (made by `npm run site:setup`), then a prompt.
+const local = loadLocalConfig();
+const url = (process.env.SITE_URL || local.SITE_URL || (await askVisible('Planner server address (https://...): '))).trim();
+const token = (process.env.SITE_TOKEN || local.SITE_TOKEN || (await askHidden('Planner API token: '))).trim();
+const password = process.env.SITE_PASSWORD ?? local.SITE_PASSWORD ?? (await askHidden('Site password: '));
 
 try {
   if (password.length < 12) console.warn('\nNote: that password is short. Anyone can try guesses against the page offline; a longer one is safer.');
