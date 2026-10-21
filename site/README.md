@@ -42,6 +42,23 @@ branch `main`, folder `/docs`. The site lives at `https://<your-username>.github
 
 Rebuild whenever you change the password, the server address or the token, or when the site code changes.
 
+### The short way
+
+Set the address and token once as Windows user environment variables (they are read by the build; the password still has to be typed):
+
+```powershell
+setx SITE_URL "https://<your-worker>.workers.dev"
+setx SITE_TOKEN "<your API token>"
+```
+
+Open a new terminal, then from `server/`:
+
+```bash
+npm run site:publish
+```
+
+It asks only for the password, rebuilds, commits just `docs/` and pushes. If nothing changed it says so and stops.
+
 The server must allow the site's origin. By default it allows `https://marioario5.github.io`; for another address set the
 `ALLOWED_ORIGINS` variable on the Worker (comma-separated).
 

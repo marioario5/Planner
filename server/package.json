@@ -25,6 +25,7 @@
     "db:notes:local": "wrangler d1 execute cozy-planner --local --file=migrations/0008_user_notes.sql",
     "db:notes:remote": "wrangler d1 execute cozy-planner --remote --file=migrations/0008_user_notes.sql",
     "site:build": "node ../site/build.mjs",
+    "site:publish": "node ../site/publish.mjs",
     "db:start:local": "wrangler d1 execute cozy-planner --local --file=migrations/0009_start_flag_rating_experiments.sql",
     "db:start:remote": "wrangler d1 execute cozy-planner --remote --file=migrations/0009_start_flag_rating_experiments.sql",
     "db:pause:local": "wrangler d1 execute cozy-planner --local --file=migrations/0010_pause.sql",
