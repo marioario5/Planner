@@ -1,6 +1,7 @@
 import { bearerMatches, tokenConfigured, tokenMatches } from './auth';
 import { D1TaskStore } from './d1-store';
 import { plannerToday, resolveDate } from './dates';
+import { isCalcRestDay, loadCalcSource } from './calc-source';
 import { FirebaseSite, parseResets } from './firebase';
 import { handleMcpPost } from './mcp';
 import { handleMusicMcpPost } from './music';
@@ -24,6 +25,8 @@ export interface Env {
   SYNC_PREFIXES?: string;
   /** Resets of the site's plan, "prefix:epochMs" comma separated, e.g. "calc3-:1792347017018". Older check marks under the prefix are ignored. */
   SYNC_RESET_BEFORE?: string;
+  /** The progress site's public page, read for its Calc 3 schedule. Default: the college-plan repo's index.html. */
+  PLAN_SOURCE_URL?: string;
   /** Comma-separated web origins allowed to call /api from a browser (the planner website). Default: the GitHub Pages site. */
   ALLOWED_ORIGINS?: string;
 }
@@ -228,7 +231,8 @@ async function handleInner(
       const date = resolveDate(url.searchParams.get('date'), timeZone, now);
       const [tasks, info, rating] = await Promise.all([store.list(date), store.getDayInfo(date), store.getRating(date)]);
       await reconcile(store, tasks, sync); // pull in anything he ticked on the site
-      const slip = date === plannerToday(timeZone, now) ? await slippingSection(store, date, tasks) : null;
+      const isToday = date === plannerToday(timeZone, now);
+      const slip = isToday ? await slippingSection(store, date, tasks, await isCalcRestDay(sync, date)) : null;
       return json({
         date,
         headline: info.headline,
@@ -274,7 +278,13 @@ export function sourceOf(request: Request): string {
 function syncFromEnv(env: Env): SyncConfig | undefined {
   if (!env.FIREBASE_STATE_URL) return undefined;
   const resets = parseResets(env.SYNC_RESET_BEFORE);
-  return { site: new FirebaseSite(env.FIREBASE_STATE_URL, 5000, resets), prefixes: parsePrefixes(env.SYNC_PREFIXES), resets };
+  const planSourceUrl = env.PLAN_SOURCE_URL || undefined;
+  const calcSource = () => loadCalcSource(planSourceUrl);
+  const fromSite = async () => {
+    const src = await calcSource();
+    return src?.resetAt ? [{ prefix: 'calc3-', ms: src.resetAt }] : [];
+  };
+  return { site: new FirebaseSite(env.FIREBASE_STATE_URL, 5000, resets, fromSite), prefixes: parsePrefixes(env.SYNC_PREFIXES), resets, calcSource };
 }
 
 export default {

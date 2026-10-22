@@ -2,6 +2,7 @@
 // Stateless is enough here: every tool is a self-contained read or write, so there's
 // no session to track and each POST can be answered on its own.
 
+import { buildSchedule, isCalcRestDay } from './calc-source';
 import { rowsOf } from './firebase';
 import { localTime, plannerToday, plannerTimeToEpoch, resolveDate, shiftDate } from './dates';
 import {
@@ -673,7 +674,9 @@ async function frameworkCheck(ctx: McpContext, date: string, todaysTasks: Task[]
   if (date !== today) return null;
   const scheduled = new Set(todaysTasks.map((t) => t.commitmentId).filter((i): i is string => !!i));
   const left = unaddressed(framework, scheduled);
-  const floor = computeSlipping(commitments, work, log, protectedIds, today, scheduled, dailyIds).filter((s) => s.floor_needed && !s.in_todays_plan);
+  // On a rest day of the site's Calc 3 plan nothing is due for the daily item, so it needs no block.
+  const restToday = dailyIds.size > 0 && (await isCalcRestDay(ctx.sync, date));
+  const floor = computeSlipping(commitments, work, log, protectedIds, today, scheduled, dailyIds).filter((s) => s.floor_needed && !s.in_todays_plan && !(restToday && s.daily));
   if (left.length === 0 && floor.length === 0 && !framework.review_due) return null;
   return {
     ...(floor.length
@@ -1134,7 +1137,19 @@ async function siteProgress(args: Json, ctx: McpContext): Promise<Json> {
   const when = (ms: number): string | null => (ms > 0 ? `${localDate(new Date(ms).toISOString(), ctx.timeZone)} ${localTime(new Date(ms).toISOString(), ctx.timeZone)}` : null);
   const state = snap.state;
 
-  const tasks = [...snap.entries.entries()]
+  // The site's own plan, read from its public page: the dates and the rest days, and when the plan was last rewritten.
+  const calcSrc = ctx.sync.calcSource ? await ctx.sync.calcSource().catch(() => null) : null;
+  const fixedReset = (ctx.sync.resets ?? []).find((r) => r.prefix === 'calc3-')?.ms ?? 0;
+  const resetMs = Math.max(fixedReset, calcSrc?.resetAt ?? 0);
+  let droppedNow = 0;
+  const live = [...snap.entries.entries()].filter(([id, e]) => {
+    if (resetMs > 0 && id.startsWith('calc3-') && e.t < resetMs) {
+      droppedNow++;
+      return false;
+    }
+    return true;
+  });
+  const tasks = live
     .filter(([id]) => id.startsWith(prefix))
     .map(([id, e]) => ({ id, done: e.v, changed: when(e.t) }))
     .sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true }));
@@ -1153,15 +1168,33 @@ async function siteProgress(args: Json, ctx: McpContext): Promise<Json> {
 
   const daysNode = state.days as { t?: unknown; value?: { calc3?: { rest?: unknown; sig?: unknown } } } | undefined;
   const days = daysNode?.value?.calc3;
-  const calcReset = (ctx.sync.resets ?? []).find((r) => r.prefix === 'calc3-');
-  const restStale = !!calcReset && !(typeof daysNode?.t === 'number' && daysNode.t >= calcReset.ms);
+  const restStale = resetMs > 0 && !(typeof daysNode?.t === 'number' && daysNode.t >= resetMs);
+  const doneIds = new Map(live.map(([id, e]) => [id, e.v]));
+  const schedule = calcSrc ? buildSchedule(calcSrc, { sig: days?.sig, rest: days?.rest, t: typeof daysNode?.t === 'number' ? daysNode.t : null }) : null;
+  const scheduleDays = schedule?.days.map((d) => ({ date: d.date, id: d.id, rest: d.rest, title: d.title, done: doneIds.get(d.id) === true }));
+  const todayEntry = scheduleDays?.find((d) => d.date === today) ?? null;
   return {
-    ...(restStale || (snap.ignored ?? 0) > 0
+    ...(restStale || (snap.ignored ?? 0) + droppedNow > 0
       ? {
           stale_state: {
-            ignored_entries: snap.ignored ?? 0,
+            ignored_entries: (snap.ignored ?? 0) + droppedNow,
             rest_slots_ignored: restStale,
-            why: "The site's Calc 3 plan was rewritten after these check marks were stored, so they belong to the old plan and are left out. Until he opens the progress site once, it shows nothing done for the new plan: treat every Calc 3 lesson as not done, with no rest days, and say in Warnings that he should open the site to sync it.",
+            why: calcSrc
+              ? "The site's Calc 3 plan was rewritten after some saved check marks and rest days were stored, so those belong to the old plan and are left out. The dates, rest days and lessons of the CURRENT plan are in `calc3_schedule` (read from the site's own page): use that, and count a lesson as done only if it shows done there. Say in Warnings that he should open the progress site once so it saves its state in the new plan."
+              : "The site's Calc 3 plan was rewritten after these check marks were stored, so they belong to the old plan and are left out, and the current plan could not be read from the site's page just now. Treat every Calc 3 lesson as not done, take the dates and rest days from the site source in the prompt, and say in Warnings that he should open the progress site once to sync it.",
+          },
+        }
+      : {}),
+    ...(scheduleDays
+      ? {
+          calc3_schedule: {
+            plan: calcSrc!.resetToken,
+            signature: calcSrc!.sig,
+            rest_days_from: schedule!.rest_days_from,
+            note: 'One row per day of the current Calc 3 plan, with its real date. A rest day has no lesson that day. `done` comes from the check marks that belong to this plan.',
+            today: todayEntry,
+            remaining_lessons: scheduleDays.filter((d) => !d.rest && !d.done && d.date >= today).length,
+            days: scheduleDays,
           },
         }
       : {}),

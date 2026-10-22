@@ -71,6 +71,8 @@ export class FirebaseSite implements SiteClient {
     private readonly url: string,
     private readonly timeoutMs = 5000,
     readonly resets: SiteReset[] = [],
+    /** More resets, looked up on every read (the site's own STATE_RESETS, so nobody has to keep a number up to date). A failure is ignored. */
+    private readonly moreResets?: () => Promise<SiteReset[]>,
   ) {}
 
   async read(): Promise<SiteSnapshot> {
@@ -84,8 +86,16 @@ export class FirebaseSite implements SiteClient {
     const all = parseEntries(state);
     const entries = new Map<string, SiteEntry>();
     let ignored = 0;
+    let resets = this.resets;
+    if (this.moreResets) {
+      try {
+        resets = [...resets, ...(await this.moreResets())];
+      } catch {
+        // keep the fixed ones
+      }
+    }
     for (const [key, e] of all) {
-      if (this.resets.some((r) => key.startsWith(r.prefix) && e.t < r.ms)) ignored++;
+      if (resets.some((r) => key.startsWith(r.prefix) && e.t < r.ms)) ignored++;
       else entries.set(key, e);
     }
     return { etag: res.headers.get('ETag'), state, entries, ignored };

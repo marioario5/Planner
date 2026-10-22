@@ -89,7 +89,7 @@ describe('check marks that predate a rewrite of the site plan', () => {
     expect(r.calc3_rest).toEqual([]);
     expect(r.calc3_sig).toBe('59x24:calc3-t5..calc3-t63');
     expect(r.stale_state).toMatchObject({ ignored_entries: 2, rest_slots_ignored: true });
-    expect(r.stale_state.why).toContain('opens the progress site');
+    expect(r.stale_state.why).toContain('open the progress site once');
   });
 
   it("an old check mark no longer marks today's new lesson done", async () => {

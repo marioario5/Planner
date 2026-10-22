@@ -7,6 +7,7 @@
 // side. Unticking syncs too. Everything here is best effort: if the site can't be
 // reached the planner keeps working, and the next reconcile catches up.
 
+import type { CalcSource } from './calc-source';
 import { rowsOf, type SiteClient, type SiteReset } from './firebase';
 import type { Task, TaskStore } from './tasks';
 
@@ -17,6 +18,8 @@ export interface SyncConfig {
   prefixes: string[];
   /** Resets of the site's plan (see SiteReset); the client already applies them, this is for reporting. */
   resets?: SiteReset[];
+  /** Reads the site's own Calc 3 schedule from its public page (cached). Absent = the feature is off (as in tests, which never use the network). */
+  calcSource?: () => Promise<CalcSource | null>;
 }
 
 export function parsePrefixes(value: string | undefined): string[] {
