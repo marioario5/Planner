@@ -247,9 +247,12 @@ async function callMusicTool(name: string, args: Json, ctx: McpContext): Promise
     case 'get_music_sessions': {
       const days = parseDays(args.days, 14, 1);
       const sessions = await store.listMusic(new Date(plannerTimeToEpoch(shiftDate(today, -days), '00:00', timeZone)).toISOString());
+      // Tapping through the colors leaves stretches shorter than a minute (pink to green passes blue); they say nothing, so they are left out.
+      const real = sessions.filter((s) => s.endedAt === null || Date.parse(s.endedAt) - Date.parse(s.startedAt) >= 30_000);
       return {
         window_days: days,
-        sessions: sessions.map((s) => {
+        left_out_blips: sessions.length - real.length,
+        sessions: real.map((s) => {
           const start = Date.parse(s.startedAt);
           return {
             date: dateOf(start, timeZone),

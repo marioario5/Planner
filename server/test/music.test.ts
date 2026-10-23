@@ -90,6 +90,15 @@ describe('the separate music MCP endpoint', () => {
       { date: '2026-10-20', start: '19:00', mode: 'lecture', end: null, minutes: null, open: true },
     ]);
   });
+
+  it('leaves out the under-a-minute blips from tapping through the colors, and says how many', async () => {
+    const store = new MemoryTaskStore();
+    await store.saveMusic({ id: 'a', startedAt: '2026-10-19T23:00:00Z', endedAt: '2026-10-20T00:30:00Z' });
+    await store.saveMusic({ id: 'blip', startedAt: '2026-10-20T00:30:00Z', endedAt: '2026-10-20T00:30:10Z', mode: 'lecture' });
+    const r = (await callTool(store, '/music/mcp', music, 'get_music_sessions')).data;
+    expect(r.sessions.map((s: any) => s.start)).toEqual(['16:00']);
+    expect(r.left_out_blips).toBe(1);
+  });
 });
 
 describe('experiments: the same machinery, kept apart', () => {
