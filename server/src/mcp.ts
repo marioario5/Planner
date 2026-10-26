@@ -19,6 +19,7 @@ import {
   slippingLines,
   unaddressed,
 } from './framework';
+import { dayTypeCheck, isCollegeDay } from './daytype';
 import { MAX_ACTIVE_NOTES, resolvedToPrune, viewUserNotes } from './user-notes';
 import { DEFAULT_WINDOW_DAYS, MAX_WINDOW_DAYS, computeHabits, evaluateExperiments } from './habits';
 import { DEFAULT_PREFIXES, isSyncable, reconcile, type SyncConfig } from './sync';
@@ -696,6 +697,15 @@ async function frameworkCheck(ctx: McpContext, date: string, todaysTasks: Task[]
   };
 }
 
+/** After publishing a plan for today or later: does a normal day (Mon to Fri) stay under his cap and keep college work for the weekend? */
+async function dayTypeFor(ctx: McpContext, date: string, planTasks: Task[]): Promise<Json | null> {
+  const today = plannerToday(ctx.timeZone, ctx.now);
+  if (date < today || isCollegeDay(date)) return null;
+  const all = await ctx.store.listRange(shiftDate(today, -DEFAULT_WINDOW_DAYS), today);
+  const cap = computeHabits(all, ctx.timeZone, today).capacity.weekday?.median_done_minutes ?? null;
+  return dayTypeCheck(date, planTasks, cap);
+}
+
 function strictDate(value: unknown, name: string): string {
   if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) throw new ValidationError(`${name} must look like YYYY-MM-DD`);
   return resolveDate(value, 'UTC');
@@ -1224,7 +1234,8 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
       await reconcile(store, all, ctx.sync); // a lesson already ticked on the site arrives ticked
       const published = summarize(date, plan, all.filter((t) => t.plan === plan), timeZone);
       const check = await frameworkCheck(ctx, date, all);
-      return check ? { ...published, framework_check: check } : published;
+      const dayType = await dayTypeFor(ctx, date, all.filter((t) => t.plan === plan));
+      return { ...published, ...(check ? { framework_check: check } : {}), ...(dayType ? { day_type_check: dayType } : {}) };
     }
     case 'set_day_info': {
       const date = resolveDate(args.date, timeZone, now);
