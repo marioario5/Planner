@@ -775,7 +775,11 @@ async function weekExport(args: Json, ctx: McpContext): Promise<Json> {
       ...(other ? { other_plan: other } : {}),
       ...(ratings.has(date) ? { rating: ratings.get(date) } : {}),
       headline: info.headline || null,
-      tasks: tasks.map((t) => view(t, timeZone, bulk, together, slot)),
+      // The block's instruction text (notes) is long and useless for analysis, and 90 days of it is most of the payload.
+      tasks: tasks.map((t) => {
+        const { notes: _notes, ...row } = view(t, timeZone, bulk, together, slot);
+        return row;
+      }),
     });
   }
   const fromIso = new Date(plannerTimeToEpoch(from, '00:00', timeZone)).toISOString();
