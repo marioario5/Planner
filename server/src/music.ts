@@ -20,6 +20,9 @@ const MIN_PER_GROUP = 3; // blocks needed before a figure is shown
 const OPEN_SESSION_CAP_MS = 6 * 3_600_000; // an open session older than this was probably forgotten
 const SHARE_ON = 0.6; // a block counts as browsing/lecture when at least this much of it ran under that mode
 const SILENCE_SHARE = 0.1; // ...and as silence when no more than this ran under either
+const NOTES_KEY = 'music_notes'; // kept in the same small key/value store the framework uses, so no migration is needed
+const MAX_NOTES = 100;
+const NOTE_MAX_CHARS = 300;
 
 export const MUSIC_INSTRUCTIONS =
   'This is a separate experiment from the daily planner. A button on the printer in his phone app cycles through three states: pink = nothing (silence), blue = YouTube browsing (just watching videos), ' +
@@ -27,6 +30,8 @@ export const MUSIC_INSTRUCTIONS =
   'Use get_music_stats to see how his work blocks went in silence, with YouTube browsing, and with a YouTube lecture on, and set_music_experiments to run experiments on it, ' +
   'the same way the planner runs experiments: change ONE thing for several days (for example "silence during Calc 3"), and read the before/after in get_music_experiments. ' +
   'The comparison is an association, not proof: he may put browsing on for easy work and keep silence for hard work, and a lecture is usually the study material itself, so always say what else differs between the groups before drawing a conclusion. ' +
+  'He can also leave short notes about a day (set_music_notes), for example "YouTube on because the Eagles play on MNF": read them with get_music_notes before you interpret a day that looks odd, ' +
+  'because a note often explains a stretch better than the numbers do. ' +
   'Times are in the planner time zone (America/Los_Angeles); a planner day runs 04:00 to 04:00.';
 
 const dateOf = (ms: number, timeZone: string): string =>
@@ -185,6 +190,40 @@ const TOOLS = [
     annotations: { readOnlyHint: true },
   },
   {
+    name: 'get_music_notes',
+    description:
+      'Short notes he left about particular days, mostly why YouTube was on or off (for example "Eagles game on MNF, so YouTube was on all evening"). Each has a date, text and id. Optional `days` (default 28, max 90) looks back from today. ' +
+      'get_music_sessions and get_music_stats also carry the notes for the days they cover.',
+    inputSchema: { type: 'object', properties: { days: { type: 'integer', minimum: 1, maximum: 90 } } },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'set_music_notes',
+    description:
+      'Save, update or delete short notes about a day: why YouTube was on or off, or anything that explains the numbers. Each note needs `text` (max 300 characters) and a `date` (YYYY-MM-DD, default today). ' +
+      'Give an existing `id` to update or (with delete: true) remove it; a new note gets an id. Record what he said, in his words where you can, not your guess. At most 100 notes are kept (the oldest go first).',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        notes: {
+          type: 'array',
+          maxItems: 20,
+          items: {
+            type: 'object',
+            properties: {
+              id: { type: 'string', pattern: '^[a-z0-9][a-z0-9-]{0,39}$' },
+              date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+              text: { type: 'string', maxLength: NOTE_MAX_CHARS },
+              delete: { type: 'boolean' },
+            },
+          },
+        },
+      },
+      required: ['notes'],
+    },
+    annotations: { destructiveHint: false, idempotentHint: true },
+  },
+  {
     name: 'get_music_experiments',
     description:
       'The music experiments with the live before/after comparison for each running one (same measures as the planner experiments: done_pct, lateness, blocks_done, rating), ' +
@@ -225,6 +264,58 @@ const TOOLS = [
   },
 ];
 
+interface MusicNote {
+  id: string;
+  date: string;
+  text: string;
+}
+
+async function loadNotes(store: McpContext['store']): Promise<MusicNote[]> {
+  try {
+    const raw = await store.getMeta(NOTES_KEY);
+    const list = raw ? (JSON.parse(raw) as unknown) : [];
+    return Array.isArray(list) ? list.filter((n): n is MusicNote => !!n && typeof n.id === 'string' && typeof n.date === 'string' && typeof n.text === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+const notesIn = (notes: MusicNote[], from: string, through: string) =>
+  notes.filter((n) => n.date >= from && n.date <= through).sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : a.id.localeCompare(b.id)));
+
+async function setNotes(args: Json, ctx: McpContext, today: string): Promise<Json> {
+  if (!Array.isArray(args.notes) || args.notes.length === 0) throw new ValidationError('notes must be a non-empty array');
+  if (args.notes.length > 20) throw new ValidationError('at most 20 notes per call');
+  let notes = await loadNotes(ctx.store);
+  const saved: string[] = [];
+  const deleted: string[] = [];
+  for (const raw of args.notes) {
+    if (typeof raw !== 'object' || raw === null) throw new ValidationError('each note must be an object');
+    const r = raw as Json;
+    const id = r.id === undefined || r.id === null ? null : String(r.id);
+    if (id !== null && !/^[a-z0-9][a-z0-9-]{0,39}$/.test(id)) throw new ValidationError('id must be a short slug (lowercase letters, digits, dashes)');
+    if (r.delete === true) {
+      if (id === null) throw new ValidationError('delete needs the id of the note');
+      if (!notes.some((n) => n.id === id)) throw new ValidationError(`no note "${id}"`);
+      notes = notes.filter((n) => n.id !== id);
+      deleted.push(id);
+      continue;
+    }
+    const existing = id !== null ? notes.find((n) => n.id === id) : undefined;
+    const date = r.date === undefined || r.date === null ? (existing?.date ?? today) : String(r.date);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) throw new ValidationError('date must look like YYYY-MM-DD');
+    const text = r.text === undefined || r.text === null ? existing?.text : String(r.text).trim();
+    if (!text) throw new ValidationError('a note needs text');
+    if (text.length > NOTE_MAX_CHARS) throw new ValidationError(`a note is at most ${NOTE_MAX_CHARS} characters (this one is ${text.length})`);
+    const newId = id ?? `${date}-${notes.filter((n) => n.date === date).length + 1}`;
+    notes = [...notes.filter((n) => n.id !== newId), { id: newId, date, text }];
+    saved.push(newId);
+  }
+  if (notes.length > MAX_NOTES) notes = [...notes].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0)).slice(0, MAX_NOTES);
+  await ctx.store.setMeta(NOTES_KEY, JSON.stringify(notes));
+  return { saved, deleted, notes: notes.length };
+}
+
 function parseDays(value: unknown, fallback: number, min: number): number {
   if (value === undefined || value === null) return fallback;
   if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > 90) {
@@ -249,9 +340,11 @@ async function callMusicTool(name: string, args: Json, ctx: McpContext): Promise
       const sessions = await store.listMusic(new Date(plannerTimeToEpoch(shiftDate(today, -days), '00:00', timeZone)).toISOString());
       // Tapping through the colors leaves stretches shorter than a minute (pink to green passes blue); they say nothing, so they are left out.
       const real = sessions.filter((s) => s.endedAt === null || Date.parse(s.endedAt) - Date.parse(s.startedAt) >= 30_000);
+      const dayNotes = notesIn(await loadNotes(store), shiftDate(today, -days), today);
       return {
         window_days: days,
         left_out_blips: sessions.length - real.length,
+        ...(dayNotes.length ? { notes: dayNotes } : {}),
         sessions: real.map((s) => {
           const start = Date.parse(s.startedAt);
           return {
@@ -272,8 +365,15 @@ async function callMusicTool(name: string, args: Json, ctx: McpContext): Promise
         store.listRange(from, today),
         store.listMusic(new Date(plannerTimeToEpoch(shiftDate(from, -1), '00:00', timeZone)).toISOString()),
       ]);
-      return computeMusicStats(all, sessions, timeZone, today, days, nowDate.getTime());
+      const dayNotes = notesIn(await loadNotes(store), from, today);
+      return { ...computeMusicStats(all, sessions, timeZone, today, days, nowDate.getTime()), ...(dayNotes.length ? { day_notes: dayNotes } : {}) };
     }
+    case 'get_music_notes': {
+      const days = parseDays(args.days, 28, 1);
+      return { window_days: days, notes: notesIn(await loadNotes(store), shiftDate(today, -days), today) };
+    }
+    case 'set_music_notes':
+      return setNotes(args, ctx, today);
     case 'get_music_experiments': {
       const experiments = await store.listMusicExperiments();
       const earliest = experiments.filter((e) => e.status === 'running').map((e) => shiftDate(e.startedOn, -14));

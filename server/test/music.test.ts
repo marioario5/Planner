@@ -54,10 +54,10 @@ describe('the YouTube-mode switch (PUT /api/music/:id)', () => {
 });
 
 describe('the separate music MCP endpoint', () => {
-  it('has its own four tools, and the planner endpoint has none of them', async () => {
+  it('has its own six tools, and the planner endpoint has none of them', async () => {
     const store = new MemoryTaskStore();
     const m = (await rpc(store, '/music/mcp', music)('tools/list')).body.result.tools.map((t: any) => t.name);
-    expect(m).toEqual(['get_music_sessions', 'get_music_stats', 'get_music_experiments', 'set_music_experiments']);
+    expect(m).toEqual(['get_music_sessions', 'get_music_stats', 'get_music_notes', 'set_music_notes', 'get_music_experiments', 'set_music_experiments']);
     const p = (await rpc(store, '/mcp', planner)('tools/list')).body.result.tools.map((t: any) => t.name);
     expect(p.filter((n: string) => n.includes('music'))).toEqual([]);
     const info = (await rpc(store, '/music/mcp', music)('initialize', { protocolVersion: '2025-06-18' })).body.result;
@@ -98,6 +98,43 @@ describe('the separate music MCP endpoint', () => {
     const r = (await callTool(store, '/music/mcp', music, 'get_music_sessions')).data;
     expect(r.sessions.map((s: any) => s.start)).toEqual(['16:00']);
     expect(r.left_out_blips).toBe(1);
+  });
+});
+
+describe('music notes: why YouTube was on or off, read only by the music endpoint', () => {
+  const note = (store: MemoryTaskStore, notes: any[]) => callTool(store, '/music/mcp', music, 'set_music_notes', { notes });
+
+  it('saves a note for today by default, updates it by id, lists it, and removes it', async () => {
+    const store = new MemoryTaskStore();
+    const saved = await note(store, [{ text: 'YouTube on because the Eagles play on MNF' }]);
+    expect(saved.data).toMatchObject({ saved: ['2026-10-20-1'], notes: 1 }); // Tue Oct 20, 8pm PDT
+    const first = (await callTool(store, '/music/mcp', music, 'get_music_notes')).data.notes[0];
+    expect(first).toMatchObject({ text: 'YouTube on because the Eagles play on MNF' });
+    await note(store, [{ id: first.id, text: 'Eagles on MNF, YouTube on all evening' }]);
+    const after = (await callTool(store, '/music/mcp', music, 'get_music_notes')).data.notes;
+    expect(after).toHaveLength(1);
+    expect(after[0].text).toBe('Eagles on MNF, YouTube on all evening');
+    await note(store, [{ id: first.id, delete: true }]);
+    expect((await callTool(store, '/music/mcp', music, 'get_music_notes')).data.notes).toEqual([]);
+  });
+
+  it('carries the notes into the sessions list and the stats, and keeps them away from the planner endpoint', async () => {
+    const store = new MemoryTaskStore();
+    await note(store, [{ date: '2026-10-19', text: 'MNF game, YouTube on' }]);
+    const sessions = (await callTool(store, '/music/mcp', music, 'get_music_sessions')).data;
+    expect(sessions.notes).toEqual([expect.objectContaining({ date: '2026-10-19', text: 'MNF game, YouTube on' })]);
+    const stats = (await callTool(store, '/music/mcp', music, 'get_music_stats')).data;
+    expect(stats.day_notes).toHaveLength(1);
+    const plannerTools = (await rpc(store, '/mcp', planner)('tools/list')).body.result.tools.map((t: any) => t.name);
+    expect(plannerTools.filter((n: string) => n.includes('music'))).toEqual([]);
+  });
+
+  it('refuses a bad date, an empty note, a too-long note, and deleting something that is not there', async () => {
+    const store = new MemoryTaskStore();
+    expect((await note(store, [{ date: 'tomorrow', text: 'x' }])).isError).toBe(true);
+    expect((await note(store, [{ date: '2026-10-19' }])).isError).toBe(true);
+    expect((await note(store, [{ text: 'x'.repeat(301) }])).isError).toBe(true);
+    expect((await note(store, [{ id: 'nope', delete: true }])).isError).toBe(true);
   });
 });
 
