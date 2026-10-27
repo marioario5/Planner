@@ -294,7 +294,7 @@ const TOOLS = [
   {
     name: 'get_week_export',
     description:
-      'Raw rows for the weekly review: for each finished planner day in the range, the plan he followed with every task and all its timing fields (same fields as list_tasks), the other plan\'s totals, his rating, and the headline the planner wrote; plus gym sessions, YouTube-mode sessions (no under-30-second blips) and the current commitments. ' +
+      'Raw rows for the weekly review: for each finished planner day in the range, the plan he followed with every task and all its timing fields (same fields as list_tasks), the other plan\'s totals, his rating, and the headline the planner wrote; plus gym sessions and the current commitments. ' +
       'Optional `from` and `to` (YYYY-MM-DD; default the last 28 finished days, up to 90). Read-only. Bigger than get_history, so use it with code, not by eye.',
     inputSchema: { type: 'object', properties: { from: dateProp, to: dateProp } },
     annotations: { readOnlyHint: true },
@@ -785,17 +785,13 @@ async function weekExport(args: Json, ctx: McpContext): Promise<Json> {
   const fromIso = new Date(plannerTimeToEpoch(from, '00:00', timeZone)).toISOString();
   const throughIso = new Date(plannerTimeToEpoch(shiftDate(through, 1), '00:00', timeZone)).toISOString();
   const within = (iso: string) => iso >= fromIso && iso < throughIso;
-  const span = (g: { startedAt: string; endedAt: string | null; mode?: string }) => ({
+  const span = (g: { startedAt: string; endedAt: string | null }) => ({
     date: localDate(g.startedAt, timeZone),
     start: localTime(g.startedAt, timeZone),
     end: g.endedAt ? localTime(g.endedAt, timeZone) : null,
     minutes: g.endedAt ? Math.round((Date.parse(g.endedAt) - Date.parse(g.startedAt)) / 60000) : null,
-    ...(g.mode ? { mode: g.mode } : {}),
   });
   const gym = (await store.listGym(fromIso)).filter((g) => within(g.startedAt)).map(span);
-  const music = (await store.listMusic(fromIso))
-    .filter((g) => within(g.startedAt) && (g.endedAt === null || Date.parse(g.endedAt) - Date.parse(g.startedAt) >= 30_000))
-    .map((g) => span({ ...g, mode: g.mode ?? 'browsing' }));
   const commitments = (await store.listCommitments()).map((c) => ({ id: c.id, title: c.title, due: c.due, status: c.status, target_minutes: c.targetMinutes, start: c.start }));
   return {
     from,
@@ -803,7 +799,6 @@ async function weekExport(args: Json, ctx: McpContext): Promise<Json> {
     note: 'One entry per day that had tasks: the plan he followed with every task (all timing fields), the other plan\'s totals, his rating (1 drained to 5 good), and the planner\'s headline for the day. Ticks flagged bulk_ticked, backfilled or flagged do not show when he worked; leave them out of timing figures.',
     days,
     gym,
-    youtube_mode: music,
     commitments,
   };
 }

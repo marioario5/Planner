@@ -140,10 +140,13 @@ export function capFromOrders(orders: Order[], date: string): number | null {
 }
 
 const isWork = (t: Task) => t.tag !== 'other';
+/** Never cut for the cap: Calc 3, SAT and listed assignments (school). */
+const REQUIRED_TAGS = new Set(['calculus3', 'sat', 'school']);
 
 /** Checks one plan against the orders that apply to its date and have an automatic check. Reported, never enforced. */
-export function checkDirectives(date: string, planTasks: Task[], orders: Order[]): { checked: number; broken: { id: string; text: string; why: string }[] } {
+export function checkDirectives(date: string, planTasks: Task[], orders: Order[]): { checked: number; broken: { id: string; text: string; why: string }[]; notes: string[] } {
   const broken: { id: string; text: string; why: string }[] = [];
+  const notes: string[] = [];
   let checked = 0;
   const timed = planTasks.filter((t) => t.start).sort((a, b) => toMin(a.start!) - toMin(b.start!));
   for (const o of orders) {
@@ -158,8 +161,17 @@ export function checkDirectives(date: string, planTasks: Task[], orders: Order[]
         break;
       }
       case 'cap_minutes': {
-        const total = planTasks.filter(isWork).reduce((n, t) => n + (t.minutes ?? 0), 0);
-        if (total > c.minutes) fail(`${total} work minutes planned, the cap is ${c.minutes} (over by ${total - c.minutes})`);
+        // Calc 3, SAT and listed assignments are never cut for the cap, so only the rest can be a broken order; when required work alone is over, it is a note.
+        const work = planTasks.filter(isWork);
+        const total = work.reduce((n, t) => n + (t.minutes ?? 0), 0);
+        const required = work.filter((t) => REQUIRED_TAGS.has(t.tag)).reduce((n, t) => n + (t.minutes ?? 0), 0);
+        const over = total - c.minutes;
+        if (over > 0 && total - required > 0 && over > Math.max(0, required - c.minutes)) {
+          const cut = Math.min(over, total - required);
+          fail(`${total} work minutes planned, the cap is ${c.minutes} (over by ${over}); cut at least ${cut} of the work that is not Calc 3, SAT or a listed assignment`);
+        } else if (over > 0) {
+          notes.push(`${o.id}: Calc 3, SAT and listed assignments alone are ${required} minutes against the cap of ${c.minutes}; keep them and say "Over cap by ${over} min because X" in Warnings`);
+        }
         break;
       }
       case 'no_block_window': {
@@ -185,5 +197,5 @@ export function checkDirectives(date: string, planTasks: Task[], orders: Order[]
       }
     }
   }
-  return { checked, broken };
+  return { checked, broken, notes };
 }

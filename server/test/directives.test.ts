@@ -32,18 +32,25 @@ describe('standing orders: the automatic checks', () => {
   const good = [t('SAT', 'sat', '17:00', 20), t('Calc 3', 'calculus3', '17:30', 60), t('Stats', 'school', '18:55', 30), t('Dinner', 'other', '20:30', 30)];
 
   it('passes a plan that keeps every order', () => {
-    expect(checkDirectives('2026-10-27', good, orders)).toEqual({ checked: 5, broken: [] });
+    expect(checkDirectives('2026-10-27', good, orders)).toEqual({ checked: 5, broken: [], notes: [] });
   });
 
   it('names each broken order and why', () => {
-    const bad = [t('Early', 'school', '16:00', 30), t('Calc 3', 'calculus3', '17:00', 90), t('Stats', 'school', '18:40', 30), t('Late thing', 'school', '20:10', 20), t('Dinner', 'other', '21:30', 30)];
+    const bad = [t('Early', 'school', '16:00', 30), t('Calc 3', 'calculus3', '17:00', 90), t('Stats', 'school', '18:40', 30), t('Late thing', 'pcb', '20:10', 20), t('Dinner', 'other', '21:30', 30)];
     const r = checkDirectives('2026-10-27', bad, orders);
     expect(r.broken.map((b) => b.id).sort()).toEqual(['calc-break', 'cap', 'dinner', 'quiet', 'start']);
     expect(r.broken.find((b) => b.id === 'cap')!.why).toContain('over by 50');
   });
 
+  it('does not call it broken when Calc 3, SAT and assignments alone are over the cap, only notes it', () => {
+    const heavy = [t('Calc 3', 'calculus3', '17:00', 80), t('SAT', 'sat', '18:25', 20), t('Stats', 'school', '18:55', 95), t('Dinner', 'other', '20:30', 30)];
+    const r = checkDirectives('2026-10-27', heavy, parseOrders([order({ id: 'cap', applies: 'weekday', check: { kind: 'cap_minutes', minutes: 120 } })]));
+    expect(r.broken).toEqual([]);
+    expect(r.notes[0]).toContain('Over cap by 75');
+  });
+
   it('applies weekday orders only on weekdays', () => {
-    const early = [t('Early', 'school', '10:00', 200), t('Dinner', 'other', '20:30', 30)];
+    const early = [t('Early', 'pcb', '10:00', 200), t('Dinner', 'other', '20:30', 30)];
     expect(checkDirectives('2026-10-31', early, orders).broken).toEqual([]); // Saturday: only the "all" orders apply
     expect(checkDirectives('2026-10-27', early, orders).broken.map((b) => b.id).sort()).toEqual(['cap', 'start']);
   });
@@ -86,7 +93,7 @@ describe('standing orders through the MCP endpoint', () => {
     await call(store, 'set_directives', {
       orders: [order({ id: 'start', applies: 'weekday', check: { kind: 'start_not_before', time: '17:00' } }), order({ id: 'cap', applies: 'weekday', check: { kind: 'cap_minutes', minutes: 60 } })],
     });
-    const r = (await call(store, 'set_daily_plan', { date: '2026-10-27', tasks: [{ title: 'Early SAT', tag: 'sat', start: '16:00', minutes: 90 }] })).data;
+    const r = (await call(store, 'set_daily_plan', { date: '2026-10-27', tasks: [{ title: 'Early PCB', tag: 'pcb', start: '16:00', minutes: 90 }] })).data;
     expect(r.directive_check.broken.map((b: any) => b.id).sort()).toEqual(['cap', 'start']);
     expect(r.day_type_check.over_cap).toMatchObject({ cap_minutes: 60, over_by: 30 });
     const ok = (await call(store, 'set_daily_plan', { date: '2026-10-27', tasks: [{ title: 'SAT', tag: 'sat', start: '17:00', minutes: 30 }] })).data;
