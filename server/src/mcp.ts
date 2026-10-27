@@ -1183,6 +1183,9 @@ async function siteProgress(args: Json, ctx: McpContext): Promise<Json> {
   const schedule = calcSrc ? buildSchedule(calcSrc, { sig: days?.sig, rest: days?.rest, t: typeof daysNode?.t === 'number' ? daysNode.t : null }) : null;
   const scheduleDays = schedule?.days.map((d) => ({ date: d.date, id: d.id, rest: d.rest, title: d.title, done: doneIds.get(d.id) === true }));
   const todayEntry = scheduleDays?.find((d) => d.date === today) ?? null;
+  // A Skip ticks the rest row it uses up. A rest row ticked ahead of its own date therefore means he skipped since the layout was saved
+  // (the site pushes check marks and the rest layout separately, and the layout can lag behind).
+  const tickedAhead = scheduleDays?.filter((d) => d.rest && d.done && d.date > today).map((d) => `${d.date} ${d.id}`) ?? [];
   return {
     ...(restStale || (snap.ignored ?? 0) + droppedNow > 0
       ? {
@@ -1202,6 +1205,17 @@ async function siteProgress(args: Json, ctx: McpContext): Promise<Json> {
             signature: calcSrc!.sig,
             rest_days_from: schedule!.rest_days_from,
             note: 'One row per day of the current Calc 3 plan, with its real date. A rest day has no lesson that day. `done` comes from the check marks that belong to this plan.',
+            rest_layout_saved_at: typeof daysNode?.t === 'number' ? when(daysNode.t) : null,
+            ...(tickedAhead.length
+              ? {
+                  rest_layout_may_be_stale: {
+                    rest_rows_ticked_ahead_of_their_date: tickedAhead,
+                    why:
+                      'These rest rows are ticked before their date, which is what a Skip leaves behind, so he has probably skipped or moved a day since the rest layout was saved and the dates and lessons below may be a day or more off. ' +
+                      'If he told you today\'s lesson (in his notes or chat), use his word and say so in Warnings; otherwise say the schedule may be stale and ask him to open the progress site once so it saves.',
+                  },
+                }
+              : {}),
             today: todayEntry,
             remaining_lessons: scheduleDays.filter((d) => !d.rest && !d.done && d.date >= today).length,
             days: scheduleDays,

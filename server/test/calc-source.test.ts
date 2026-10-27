@@ -112,6 +112,15 @@ describe('get_site_progress with the schedule', () => {
     expect(r.stale_state.why).toContain('calc3_schedule');
   });
 
+  it('warns that the rest layout may be stale when a rest row is ticked ahead of its date (what a Skip leaves behind)', async () => {
+    const state = { at: 5_000_000, tasks: [['calc3-t10', 1, 4_000_000]], days: { t: 3_000_000, value: { calc3: { sig: '6x2:calc3-t7..calc3-t11', rest: [0, 4] } } }, cal: [] };
+    const r = await call({ site: siteWith(state), prefixes: ['calc3-'], calcSource: async () => parseCalcSource(PAGE) });
+    expect(r.calc3_schedule.rest_layout_may_be_stale.rest_rows_ticked_ahead_of_their_date).toEqual(['2026-10-23 calc3-t10']);
+    expect(r.calc3_schedule.rest_layout_saved_at).not.toBeNull();
+    const fresh = await call({ site: siteWith({ ...state, tasks: [] }), prefixes: ['calc3-'], calcSource: async () => parseCalcSource(PAGE) });
+    expect(fresh.calc3_schedule.rest_layout_may_be_stale).toBeUndefined();
+  });
+
   it('still answers when the page cannot be read', async () => {
     const state = { at: 1, tasks: [], days: { t: 100, value: { calc3: { sig: 'x', rest: [] } } }, cal: [] };
     const r = await call({ site: siteWith(state), prefixes: ['calc3-'], calcSource: async () => null });
