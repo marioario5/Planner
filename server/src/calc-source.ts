@@ -10,7 +10,8 @@
 export interface CalcWeek {
   id: string;
   start: [number, number, number] | null;
-  days: { id: string; rest: boolean }[];
+  /** `pinned` is a rest day that never moves (the SAT); the site leaves it out of its movable rests. */
+  days: { id: string; rest: boolean; pinned: boolean }[];
 }
 
 export interface CalcSource {
@@ -19,7 +20,7 @@ export interface CalcSource {
   /** When the site's plan was last rewritten (its STATE_RESETS entry for calc3), epoch ms. */
   resetAt: number | null;
   resetToken: string | null;
-  /** `<slots>x<rests>:<first lesson>..<last lesson>`, the same signature the site stores next to its saved rest days. */
+  /** `<slots>x<movable rests>:<first lesson>..<last lesson>`, the same signature the site stores next to its saved rest days (pinned days count in neither list). */
   sig: string;
 }
 
@@ -68,14 +69,14 @@ const decode = (s: string): string =>
 
 /** Reads the schedule out of the page. Null if the page does not look like the planner site. */
 export function parseCalcSource(html: string): CalcSource | null {
-  const grids = jsonAfter(html, '"DAY_GRIDS":') as { week: string; days: { id: string; rest: boolean }[] }[] | null;
+  const grids = jsonAfter(html, '"DAY_GRIDS":') as { week: string; days: { id: string; rest: boolean; pinned?: boolean }[] }[] | null;
   if (!Array.isArray(grids)) return null;
   const weeks: CalcWeek[] = grids
     .filter((g) => typeof g.week === 'string' && g.week.startsWith('calc3-') && Array.isArray(g.days))
     .map((g) => {
       const at = html.indexOf(`"id": "${g.week}"`);
       const m = at < 0 ? null : /"range":\s*\{[^}]*?"start":\s*\[(\d+),\s*(\d+),\s*(\d+)\]/.exec(html.slice(at, at + 12_000));
-      return { id: g.week, start: m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null, days: g.days.map((d) => ({ id: d.id, rest: !!d.rest })) };
+      return { id: g.week, start: m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null, days: g.days.map((d) => ({ id: d.id, rest: !!d.rest, pinned: !!d.pinned })) };
     });
   if (weeks.length === 0) return null;
 
@@ -85,13 +86,14 @@ export function parseCalcSource(html: string): CalcSource | null {
 
   const resets = jsonAfter(html, '"STATE_RESETS":') as Record<string, { token?: string; at?: number }> | null;
   const slots = weeks.flatMap((w) => w.days);
-  const lessons = slots.filter((d) => !d.rest).map((d) => d.id);
+  const lessons = slots.filter((d) => !d.rest && !d.pinned).map((d) => d.id);
+  const movableRests = slots.filter((d) => d.rest && !d.pinned).length;
   return {
     weeks,
     titles,
     resetAt: typeof resets?.calc3?.at === 'number' ? resets.calc3.at : null,
     resetToken: typeof resets?.calc3?.token === 'string' ? resets.calc3.token : null,
-    sig: `${slots.length}x${slots.length - lessons.length}:${lessons[0] ?? '-'}..${lessons[lessons.length - 1] ?? '-'}`,
+    sig: `${slots.length}x${movableRests}:${lessons[0] ?? '-'}..${lessons[lessons.length - 1] ?? '-'}`,
   };
 }
 
@@ -101,37 +103,51 @@ function addDays(start: [number, number, number], days: number): string {
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
 }
 
-/** What the site stored for itself (`state.days.value.calc3` and the time it was written). */
+/** What the site stored for itself (`state.days.value.calc3` and the time it was written). `live` is the site's own computed schedule, when it publishes one. */
 export interface StoredDays {
   sig?: unknown;
   rest?: unknown;
+  live?: unknown;
   t?: number | null;
 }
+
+export type LayoutSource = 'the site\'s own saved schedule' | 'his saved changes' | 'the plan as written';
 
 /**
  * The schedule, day by day. Slot i is the i-th day of the plan (weeks in order, one slot per day); a rest slot takes the next "Rest" row and every
  * other slot the next lesson in document order, exactly as the site does. The rest days are the ones he saved (if what he saved belongs to this
  * plan: same signature and written after the plan was rewritten), otherwise the ones the plan itself authored.
  */
-export function buildSchedule(src: CalcSource, stored: StoredDays | undefined): { days: CalcDay[]; rest_days_from: 'his saved changes' | 'the plan as written' } {
-  const slots = src.weeks.flatMap((w) => w.days.map((d, i) => ({ week: w, dayIdx: i, authoredRest: d.rest })));
+export function buildSchedule(src: CalcSource, stored: StoredDays | undefined): { days: CalcDay[]; rest_days_from: LayoutSource } {
+  const slots = src.weeks.flatMap((w) => w.days.map((d, i) => ({ week: w, dayIdx: i, authoredRest: d.rest && !d.pinned, pinnedId: d.pinned ? d.id : null })));
   let restSlots = new Set(slots.map((s, i) => (s.authoredRest ? i : -1)).filter((i) => i >= 0));
-  let from: 'his saved changes' | 'the plan as written' = 'the plan as written';
+  let from: LayoutSource = 'the plan as written';
   const restCount = restSlots.size;
   const saved = Array.isArray(stored?.rest) ? (stored!.rest as unknown[]).filter((i): i is number => Number.isInteger(i) && (i as number) >= 0 && (i as number) < slots.length) : null;
   const fresh = src.resetAt === null || (typeof stored?.t === 'number' && stored.t >= src.resetAt);
-  if (saved && stored?.sig === src.sig && fresh && new Set(saved).size === restCount) {
+  const sameShape = stored?.sig === src.sig && fresh;
+
+  // The site's own computed schedule, when it publishes one for this plan: use it as it is.
+  const live = Array.isArray(stored?.live) ? (stored!.live as { date?: unknown; id?: unknown; rest?: unknown }[]) : null;
+  if (sameShape && live && live.length === slots.length && live.every((d) => typeof d?.date === 'string' && typeof d?.id === 'string' && typeof d?.rest === 'boolean')) {
+    return {
+      days: live.map((d, i) => ({ date: d.date as string, id: d.id as string, rest: d.rest as boolean, title: src.titles[d.id as string] ?? null, week: slots[i].week.id })),
+      rest_days_from: "the site's own saved schedule",
+    };
+  }
+
+  if (saved && sameShape && new Set(saved.filter((i) => slots[i].pinnedId === null)).size === restCount && saved.every((i) => slots[i].pinnedId === null)) {
     restSlots = new Set(saved);
     from = 'his saved changes';
   }
 
-  const lessons = src.weeks.flatMap((w) => w.days).filter((d) => !d.rest).map((d) => d.id);
-  const rests = src.weeks.flatMap((w) => w.days).filter((d) => d.rest).map((d) => d.id);
+  const lessons = src.weeks.flatMap((w) => w.days).filter((d) => !d.rest && !d.pinned).map((d) => d.id);
+  const rests = src.weeks.flatMap((w) => w.days).filter((d) => d.rest && !d.pinned).map((d) => d.id);
   let lp = 0;
   let rp = 0;
   const days = slots.map((s, i) => {
-    const rest = restSlots.has(i);
-    const id = (rest ? rests[rp++] : lessons[lp++]) ?? `calc3-slot-${i}`;
+    const rest = s.pinnedId !== null || restSlots.has(i);
+    const id = s.pinnedId ?? (rest ? rests[rp++] : lessons[lp++]) ?? `calc3-slot-${i}`;
     return { date: s.week.start ? addDays(s.week.start, s.dayIdx) : '', id, rest, title: src.titles[id] ?? null, week: s.week.id };
   });
   return { days, rest_days_from: from };
@@ -147,8 +163,8 @@ export async function isCalcRestDay(
     const src = await sync.calcSource();
     if (!src) return false;
     const snap = await sync.site.read();
-    const dn = snap.state.days as { t?: unknown; value?: { calc3?: { sig?: unknown; rest?: unknown } } } | undefined;
-    const plan = buildSchedule(src, { sig: dn?.value?.calc3?.sig, rest: dn?.value?.calc3?.rest, t: typeof dn?.t === 'number' ? dn.t : null });
+    const dn = snap.state.days as { t?: unknown; value?: { calc3?: { sig?: unknown; rest?: unknown; live?: unknown } } } | undefined;
+    const plan = buildSchedule(src, { sig: dn?.value?.calc3?.sig, rest: dn?.value?.calc3?.rest, live: dn?.value?.calc3?.live, t: typeof dn?.t === 'number' ? dn.t : null });
     return plan.days.find((d) => d.date === today)?.rest === true;
   } catch {
     return false;

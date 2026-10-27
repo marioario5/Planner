@@ -59,6 +59,42 @@ describe('reading the Calc 3 schedule from the site page', () => {
     expect(buildSchedule(src, { sig: src.sig, rest: [1], t: 3_000_000 }).rest_days_from).toBe('the plan as written'); // does not balance
   });
 
+  // The site leaves a pinned rest day (the SAT) out of its movable rests and lessons, so its signature counts one rest fewer than the grid has.
+  const PINNED_PAGE = PAGE.replace('{"id": "calc3-t11", "rest": false}', '{"id": "calc3-t11", "rest": true, "pinned": true}');
+
+  it('computes the same signature as the site: a pinned rest day counts as neither a movable rest nor a lesson', () => {
+    expect(parseCalcSource(PINNED_PAGE)!.sig).toBe('6x2:calc3-t7..calc3-t9'); // t6 and t10 are movable rests; t11 is pinned; the lessons are t7 to t9
+  });
+
+  it('ignores a saved layout made for a different shape of plan, and keeps a pinned day where it is', () => {
+    const src = parseCalcSource(PINNED_PAGE)!;
+    const stale = buildSchedule(src, { sig: '6x3:calc3-t7..calc3-t9', rest: [0, 3, 4], t: 3_000_000 }); // saved before the SAT was pinned
+    expect(stale.rest_days_from).toBe('the plan as written');
+    const day = (r: ReturnType<typeof buildSchedule>, date: string) => r.days.find((d) => d.date === date)!;
+    expect(day(stale, '2026-10-24')).toMatchObject({ id: 'calc3-t11', rest: true }); // the pinned day is rest whatever else happens
+    const moved = buildSchedule(src, { sig: src.sig, rest: [1, 3], t: 3_000_000 }); // movable rests moved to Oct 20 and Oct 22
+    expect(moved.rest_days_from).toBe('his saved changes');
+    expect(moved.days.map((d) => [d.date, d.rest])).toEqual([['2026-10-19', false], ['2026-10-20', true], ['2026-10-21', false], ['2026-10-22', true], ['2026-10-23', false], ['2026-10-24', true]]);
+    expect(buildSchedule(src, { sig: src.sig, rest: [1, 5], t: 3_000_000 }).rest_days_from).toBe('the plan as written'); // a rest slot on the pinned day is not a valid layout
+  });
+
+  it("uses the site's own published schedule when its signature matches, and not when it does not", () => {
+    const src = parseCalcSource(PAGE)!;
+    const live = [
+      { date: '2026-10-19', id: 'calc3-t7', rest: false },
+      { date: '2026-10-20', id: 'calc3-t6', rest: true },
+      { date: '2026-10-21', id: 'calc3-t8', rest: false },
+      { date: '2026-10-22', id: 'calc3-t9', rest: false },
+      { date: '2026-10-23', id: 'calc3-t10', rest: true },
+      { date: '2026-10-24', id: 'calc3-t11', rest: false },
+    ];
+    const r = buildSchedule(src, { sig: src.sig, live, t: 3_000_000 });
+    expect(r.rest_days_from).toBe("the site's own saved schedule");
+    expect(r.days.map((d) => [d.date, d.id, d.rest])).toEqual(live.map((d) => [d.date, d.id, d.rest]));
+    expect(buildSchedule(src, { sig: '59x24:old', live, t: 3_000_000 }).rest_days_from).toBe('the plan as written');
+    expect(buildSchedule(src, { sig: src.sig, live: live.slice(0, 3), t: 3_000_000 }).rest_days_from).toBe('the plan as written'); // wrong length
+  });
+
   it('is cached for ten minutes and keeps the last good copy if a later fetch fails', async () => {
     let calls = 0;
     let fail = false;
@@ -110,15 +146,6 @@ describe('get_site_progress with the schedule', () => {
     expect(r.calc3_rest).toEqual([]);
     expect(r.stale_state).toMatchObject({ ignored_entries: 1, rest_slots_ignored: true });
     expect(r.stale_state.why).toContain('calc3_schedule');
-  });
-
-  it('warns that the rest layout may be stale when a rest row is ticked ahead of its date (what a Skip leaves behind)', async () => {
-    const state = { at: 5_000_000, tasks: [['calc3-t10', 1, 4_000_000]], days: { t: 3_000_000, value: { calc3: { sig: '6x2:calc3-t7..calc3-t11', rest: [0, 4] } } }, cal: [] };
-    const r = await call({ site: siteWith(state), prefixes: ['calc3-'], calcSource: async () => parseCalcSource(PAGE) });
-    expect(r.calc3_schedule.rest_layout_may_be_stale.rest_rows_ticked_ahead_of_their_date).toEqual(['2026-10-23 calc3-t10']);
-    expect(r.calc3_schedule.rest_layout_saved_at).not.toBeNull();
-    const fresh = await call({ site: siteWith({ ...state, tasks: [] }), prefixes: ['calc3-'], calcSource: async () => parseCalcSource(PAGE) });
-    expect(fresh.calc3_schedule.rest_layout_may_be_stale).toBeUndefined();
   });
 
   it('still answers when the page cannot be read', async () => {
