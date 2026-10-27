@@ -20,6 +20,7 @@ import {
   unaddressed,
 } from './framework';
 import { dayTypeCheck, isCollegeDay } from './daytype';
+import { capFromOrders, checkDirectives, loadDirectiveHistory, loadDirectives, parseOrders, saveDirectives, type Order } from './directives';
 import { MAX_ACTIVE_NOTES, resolvedToPrune, viewUserNotes } from './user-notes';
 import { DEFAULT_WINDOW_DAYS, MAX_WINDOW_DAYS, computeHabits, evaluateExperiments } from './habits';
 import { DEFAULT_PREFIXES, isSyncable, reconcile, type SyncConfig } from './sync';
@@ -64,7 +65,8 @@ const INSTRUCTIONS =
   'get_habits returns statistics on how he actually works plus the habit notes you keep with set_habits; read it before planning. ' +
   'get_framework returns a short list of SUGGESTIONS from earlier planning runs about what might matter over the next month; ' +
   'you are free to follow, change or ignore them, but do not let a flagged one vanish by accident. ' +
-  'get_user_notes returns short summaries of things he told earlier agents that are not tied to one date (context, never definitive).';
+  'get_user_notes returns short summaries of things he told earlier agents that are not tied to one date (context, never definitive). ' +
+  'get_directives returns the standing orders the weekly review decided: follow them as written, and set_daily_plan reports any a plan breaks (`directive_check`). Only the weekly review calls set_directives.';
 
 const TAG_HELP =
   'school = general schoolwork; calculus3 = Calculus 3 (homework, studying, quizzes); ' +
@@ -261,6 +263,40 @@ const TOOLS = [
       "Time he spent at the gym, from the switch on his phone app (it works offline and syncs later). Each session has local date, start, end and minutes; `open: true` means he is there now or forgot to switch it off. " +
       "It is real, deliberate time away from the desk: never read it as wasted time or as a gap in his work, and don't plan work over it. Optional `days` (default 14, max 60) looks back from today.",
     inputSchema: { type: 'object', properties: { days: { type: 'integer', minimum: 1, maximum: 60 } } },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'get_directives',
+    description:
+      'The standing orders the weekly review decided from the data (for example "weekday Plan A starts at 17:00", "normal-day work cap 120 minutes", "dinner 20:30"). They are decided facts: apply them as written without re-deriving them. ' +
+      'Each has an id, the instruction, where it applies (weekday = Mon to Fri, weekend = Sat and Sun, all), one line of evidence, a review-by date, and sometimes an automatic `check` that set_daily_plan verifies on every plan (reported as `directive_check`). ' +
+      '`review_overdue` lists orders past their review date (still in force until the weekly review reissues them). `history: true` also returns every earlier version, so the weekly review can see its own past decisions.',
+    inputSchema: { type: 'object', properties: { history: { type: 'boolean' } } },
+    annotations: { readOnlyHint: true },
+  },
+  {
+    name: 'set_directives',
+    description:
+      'ONLY the weekly review calls this; the daily planner never does. Replaces the whole set of standing orders (pass every order you want kept; at most 15) and saves it as a new version. ' +
+      'Each order needs an id (slug), `text` (the concrete instruction, with a number or clock time), `applies` (weekday | weekend | all), `evidence` (one line with the n), and `review_by` (YYYY-MM-DD). ' +
+      'Add `check` only for what can be verified automatically: {kind: "start_not_before", time}, {kind: "cap_minutes", minutes}, {kind: "no_block_window", from, to}, {kind: "min_gap_after_tag", tag, minutes}, {kind: "dinner_at", time, tolerance_min?}. ' +
+      'Optional `note` says what changed and why.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        orders: { type: 'array', maxItems: 15, items: { type: 'object' } },
+        note: { type: 'string', maxLength: 500 },
+      },
+      required: ['orders'],
+    },
+    annotations: { destructiveHint: false, idempotentHint: false },
+  },
+  {
+    name: 'get_week_export',
+    description:
+      'Raw rows for the weekly review: for each finished planner day in the range, the plan he followed with every task and all its timing fields (same fields as list_tasks), the other plan\'s totals, his rating, and the headline the planner wrote; plus gym sessions, YouTube-mode sessions (no under-30-second blips) and the current commitments. ' +
+      'Optional `from` and `to` (YYYY-MM-DD; default the last 28 finished days, up to 90). Read-only. Bigger than get_history, so use it with code, not by eye.',
+    inputSchema: { type: 'object', properties: { from: dateProp, to: dateProp } },
     annotations: { readOnlyHint: true },
   },
   {
@@ -698,12 +734,74 @@ async function frameworkCheck(ctx: McpContext, date: string, todaysTasks: Task[]
 }
 
 /** After publishing a plan for today or later: does a normal day (Mon to Fri) stay under his cap and keep college work for the weekend? */
-async function dayTypeFor(ctx: McpContext, date: string, planTasks: Task[]): Promise<Json | null> {
+async function dayTypeFor(ctx: McpContext, date: string, planTasks: Task[], orders: Order[] = []): Promise<Json | null> {
   const today = plannerToday(ctx.timeZone, ctx.now);
   if (date < today || isCollegeDay(date)) return null;
+  // A standing order that sets the cap is the decided number; otherwise fall back to his typical finished weekday.
+  const ordered = capFromOrders(orders, date);
+  if (ordered !== null) return dayTypeCheck(date, planTasks, ordered);
   const all = await ctx.store.listRange(shiftDate(today, -DEFAULT_WINDOW_DAYS), today);
   const cap = computeHabits(all, ctx.timeZone, today).capacity.weekday?.median_done_minutes ?? null;
   return dayTypeCheck(date, planTasks, cap);
+}
+
+/** Raw rows for the weekly review (see the get_week_export tool). */
+async function weekExport(args: Json, ctx: McpContext): Promise<Json> {
+  const { store, timeZone, now } = ctx;
+  const today = plannerToday(timeZone, now);
+  const through = args.to !== undefined && args.to !== null ? resolveDate(args.to, timeZone, now) : shiftDate(today, -1);
+  const from = args.from !== undefined && args.from !== null ? resolveDate(args.from, timeZone, now) : shiftDate(through, -27);
+  if (from > through) throw new ValidationError('from must not be after to');
+  if (shiftDate(from, 90) < through) throw new ValidationError('the range is at most 90 days');
+  const all = await store.listRange(from, through);
+  await reconcile(store, all, ctx.sync);
+  const ratings = await store.listRatings(from, through);
+  const byDate = new Map<string, Task[]>();
+  for (const t of all) byDate.set(t.date, [...(byDate.get(t.date) ?? []), t]);
+  const days = [];
+  for (const [date, dayTasks] of [...byDate.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
+    const totals = planTotals(dayTasks);
+    const followed = totals.reduce((best, p) => (p.done > best.done ? p : best));
+    const other = totals.find((p) => p.plan !== followed.plan);
+    const tasks = dayTasks.filter((t) => t.plan === followed.plan);
+    const bulk = bulkTickedIds(tasks, timeZone);
+    const together = finishedTogether(tasks, timeZone);
+    const slot = slotLateness(tasks, timeZone, bulk);
+    const info = await store.getDayInfo(date);
+    days.push({
+      date,
+      weekday: new Intl.DateTimeFormat('en-US', { timeZone: 'UTC', weekday: 'short' }).format(new Date(`${date}T12:00:00Z`)),
+      plan: followed.plan,
+      ...(other ? { other_plan: other } : {}),
+      ...(ratings.has(date) ? { rating: ratings.get(date) } : {}),
+      headline: info.headline || null,
+      tasks: tasks.map((t) => view(t, timeZone, bulk, together, slot)),
+    });
+  }
+  const fromIso = new Date(plannerTimeToEpoch(from, '00:00', timeZone)).toISOString();
+  const throughIso = new Date(plannerTimeToEpoch(shiftDate(through, 1), '00:00', timeZone)).toISOString();
+  const within = (iso: string) => iso >= fromIso && iso < throughIso;
+  const span = (g: { startedAt: string; endedAt: string | null; mode?: string }) => ({
+    date: localDate(g.startedAt, timeZone),
+    start: localTime(g.startedAt, timeZone),
+    end: g.endedAt ? localTime(g.endedAt, timeZone) : null,
+    minutes: g.endedAt ? Math.round((Date.parse(g.endedAt) - Date.parse(g.startedAt)) / 60000) : null,
+    ...(g.mode ? { mode: g.mode } : {}),
+  });
+  const gym = (await store.listGym(fromIso)).filter((g) => within(g.startedAt)).map(span);
+  const music = (await store.listMusic(fromIso))
+    .filter((g) => within(g.startedAt) && (g.endedAt === null || Date.parse(g.endedAt) - Date.parse(g.startedAt) >= 30_000))
+    .map((g) => span({ ...g, mode: g.mode ?? 'browsing' }));
+  const commitments = (await store.listCommitments()).map((c) => ({ id: c.id, title: c.title, due: c.due, status: c.status, target_minutes: c.targetMinutes, start: c.start }));
+  return {
+    from,
+    through,
+    note: 'One entry per day that had tasks: the plan he followed with every task (all timing fields), the other plan\'s totals, his rating (1 drained to 5 good), and the planner\'s headline for the day. Ticks flagged bulk_ticked, backfilled or flagged do not show when he worked; leave them out of timing figures.',
+    days,
+    gym,
+    youtube_mode: music,
+    commitments,
+  };
 }
 
 function strictDate(value: unknown, name: string): string {
@@ -1236,8 +1334,17 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
       await reconcile(store, all, ctx.sync); // a lesson already ticked on the site arrives ticked
       const published = summarize(date, plan, all.filter((t) => t.plan === plan), timeZone);
       const check = await frameworkCheck(ctx, date, all);
-      const dayType = await dayTypeFor(ctx, date, all.filter((t) => t.plan === plan));
-      return { ...published, ...(check ? { framework_check: check } : {}), ...(dayType ? { day_type_check: dayType } : {}) };
+      const orders = (await loadDirectives(store)).orders;
+      const dayType = await dayTypeFor(ctx, date, all.filter((t) => t.plan === plan), orders);
+      const planDirectives = date >= plannerToday(timeZone, now) ? checkDirectives(date, all.filter((t) => t.plan === plan), orders) : null;
+      return {
+        ...published,
+        ...(check ? { framework_check: check } : {}),
+        ...(dayType ? { day_type_check: dayType } : {}),
+        ...(planDirectives && planDirectives.broken.length
+          ? { directive_check: { ...planDirectives, rule: 'These standing orders are decided facts. Fix the plan so none is broken and publish it again, unless his notes for this day override one; then say so in one line.' } }
+          : {}),
+      };
     }
     case 'set_day_info': {
       const date = resolveDate(args.date, timeZone, now);
@@ -1311,6 +1418,26 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
     }
     case 'get_habits':
       return habits(args, ctx);
+    case 'get_week_export':
+      return weekExport(args, ctx);
+    case 'get_directives': {
+      const current = await loadDirectives(store);
+      const today = plannerToday(timeZone, now);
+      return {
+        version: current.version,
+        updated_at: current.updated_at,
+        note: current.note,
+        orders: current.orders,
+        review_overdue: current.orders.filter((o) => o.review_by < today).map((o) => o.id),
+        ...(args.history === true ? { history: await loadDirectiveHistory(store) } : {}),
+      };
+    }
+    case 'set_directives': {
+      const orders = parseOrders(args.orders);
+      const note = typeof args.note === 'string' && args.note.trim() ? args.note.trim().slice(0, 500) : null;
+      const saved = await saveDirectives(store, orders, note, (now ?? new Date()).toISOString());
+      return { version: saved.version, orders: saved.orders.length };
+    }
     case 'get_framework': {
       const f = await loadFramework(ctx, args.all === true);
       const slipping = computeSlipping(f.commitments, f.work, f.log, f.protectedIds, f.today, new Set(), f.dailyIds);
