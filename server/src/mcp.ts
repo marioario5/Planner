@@ -1213,7 +1213,8 @@ async function siteProgress(args: Json, ctx: McpContext): Promise<Json> {
     site_updated: typeof state.at === 'number' ? when(state.at) : null,
     prefix,
     tasks,
-    calc3_rest: !restStale && Array.isArray(days?.rest) ? days!.rest : [],
+    // A saved layout whose signature is not the current plan's belongs to an older plan: leave it out rather than show rest days that no longer exist.
+    calc3_rest: !restStale && Array.isArray(days?.rest) && (!calcSrc || days?.sig === calcSrc.sig) ? days!.rest : [],
     calc3_rest_note: "Rest-day slot numbers, counted from slot 0 = the first day of the Calc 3 plan in the site source (the start of its first week in DAY_GRIDS; see the planner rules for how slots map to lessons). Empty = no rest days.",
     calendar_range: { from, to },
     cal,
