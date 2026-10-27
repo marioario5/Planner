@@ -98,6 +98,8 @@ describe('standing orders through the MCP endpoint', () => {
     expect(r.day_type_check.over_cap).toMatchObject({ cap_minutes: 60, over_by: 30 });
     const ok = (await call(store, 'set_daily_plan', { date: '2026-10-27', tasks: [{ title: 'SAT', tag: 'sat', start: '17:00', minutes: 30 }] })).data;
     expect(ok.directive_check).toBeUndefined();
+    const cleared = (await call(store, 'set_daily_plan', { date: '2026-10-27', tasks: [] })).data;
+    expect(cleared.directive_check).toBeUndefined(); // clearing a plan is not a plan
   });
 });
 

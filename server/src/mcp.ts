@@ -1335,7 +1335,7 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
       const check = await frameworkCheck(ctx, date, all);
       const orders = (await loadDirectives(store)).orders;
       const dayType = await dayTypeFor(ctx, date, all.filter((t) => t.plan === plan), orders);
-      const planDirectives = date >= plannerToday(timeZone, now) ? checkDirectives(date, all.filter((t) => t.plan === plan), orders) : null;
+      const planDirectives = date >= plannerToday(timeZone, now) && parsed.length > 0 ? checkDirectives(date, all.filter((t) => t.plan === plan), orders) : null; // clearing a plan is not a plan
       return {
         ...published,
         ...(check ? { framework_check: check } : {}),
