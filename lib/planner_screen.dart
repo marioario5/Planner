@@ -530,6 +530,7 @@ class _PlannerScreenState extends State<PlannerScreen>
     }
 
     if (!mounted) return;
+    final firstPrint = !_printed;
     setState(() {
       _loading   = false;
       _tasks     = plan.tasks;
@@ -537,12 +538,12 @@ class _PlannerScreenState extends State<PlannerScreen>
       _headline  = plan.headline;
       _sections  = plan.sections;
       _printed   = true;
-      // Open the plan he is actually following: the one with more check-offs. On a tie (including
-      // nothing ticked yet) keep the plan he was on if it still exists; otherwise A, or B if A is empty.
+      // The first print opens the plan he is actually following: the one with more check-offs. A reprint never
+      // changes the tab he chose; if his plan is gone (or on a tie with nothing ticked) fall back to A, or B if A is empty.
       int doneIn(String p) => _tasks.where((t) => t.plan == p && t.done).length;
       final doneA = doneIn('A');
       final doneB = doneIn('B');
-      if (doneA != doneB) {
+      if (firstPrint && doneA != doneB) {
         _plan = doneB > doneA ? 'B' : 'A';
       } else if (!_tasks.any((t) => t.plan == _plan)) {
         final hasA = _tasks.any((t) => t.plan == 'A');

@@ -173,6 +173,21 @@ export function choosePlan(tasks, current) {
 }
 
 /**
+ * Which plan to show when the server's day arrives. Only the very first load picks by check-offs (or goes back to the tab he
+ * chose earlier today); after that his tab is never changed under him, unless its plan has disappeared.
+ */
+export function planAfterRefresh(tasks, current, firstLoad, saved) {
+  if (!firstLoad) return tasks.some((t) => t.plan === current) ? current : choosePlan(tasks, current);
+  if (saved && tasks.some((t) => t.plan === saved)) return saved;
+  return choosePlan(tasks, current);
+}
+
+/** A stable fingerprint of what the server sent, so a background refresh that brought nothing new redraws nothing. */
+export function daySignature(day) {
+  return JSON.stringify([day.date, day.tasks, day.headline, day.sections, day.rating ?? null]);
+}
+
+/**
  * Takes the server's tasks, but keeps the local copy of any task with a change still on its way to the server, so a
  * refresh in the middle of a tap can't flicker the screen back.
  */

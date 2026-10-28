@@ -35,6 +35,8 @@
   var errTimer = null;
   var popId = null; // the slip that was just pulled into Current (gets a little pop)
   var printing = false; // animate the slips out of the printer on the next render
+  var lastSig = null; // fingerprint of the last day the server sent
+  var lastTouch = 0; // when he last touched, scrolled or typed: a background refresh never redraws under his hand
 
   var MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   var DAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -151,6 +153,8 @@
   }
   function saveTicks() { try { localStorage.setItem(dayKey('ticks'), JSON.stringify(state.ticks)); } catch (e) { /* storage may be blocked */ } }
   function saveFocus() { try { localStorage.setItem(dayKey('focus'), JSON.stringify(state.focus)); } catch (e) { /* storage may be blocked */ } }
+  function savePlan() { try { localStorage.setItem(dayKey('plan'), state.plan); } catch (e) { /* storage may be blocked */ } }
+  function savedPlan() { try { return localStorage.getItem(dayKey('plan')); } catch (e) { return null; } }
   function addFocus(id) { if (state.focus.indexOf(id) < 0) { state.focus.push(id); saveFocus(); } }
   function removeFocus(id) { var i = state.focus.indexOf(id); if (i >= 0) { state.focus.splice(i, 1); saveFocus(); } }
 
@@ -195,8 +199,14 @@
   /** Fetches today's plan. `print` feeds the slips out of the printer (the first load and the REPRINT button). */
   function refresh(print) {
     if (holding || drag) return Promise.resolve();
+    // a background refresh waits while he is scrolling or touching: redrawing the lists would throw him back to the top
+    if (!print && Date.now() - lastTouch < 4000) return Promise.resolve();
     if (print) { state.loading = true; state.error = null; render(); }
     return api.getDay().then(function (day) {
+      var sig = daySignature(day);
+      // nothing new from the server and nothing of his still on its way: leave the screen exactly as it is
+      if (!print && state.loaded && sig === lastSig && Object.keys(pending).length === 0) return;
+      lastSig = sig;
       var dateChanged = state.date !== day.date;
       state.date = day.date;
       if (dateChanged) loadLocal();
@@ -204,7 +214,7 @@
       state.headline = day.headline;
       state.sections = day.sections;
       if (!pending.rating) state.rating = day.rating;
-      state.plan = choosePlan(state.tasks, state.plan);
+      state.plan = planAfterRefresh(state.tasks, state.plan, !state.loaded, savedPlan());
       // forget pulled-in slips that are gone or already done
       state.focus = state.focus.filter(function (id) { var t = byId(id); return t && !t.done; });
       saveFocus();
@@ -402,7 +412,7 @@
     ['A', 'B'].forEach(function (p) {
       if (p === 'B' && !hasPlanB()) return;
       var starts = state.tasks.filter(function (t) { return t.plan === p && t.start; }).map(function (t) { return t.start; }).sort();
-      tabs.appendChild(h('button', { class: 'tab' + (state.plan === p ? ' on' : ''), onclick: function () { state.plan = p; render(); } },
+      tabs.appendChild(h('button', { class: 'tab' + (state.plan === p ? ' on' : ''), onclick: function () { state.plan = p; savePlan(); render(); } },
         'PLAN ' + p + (starts.length ? '\n' + formatClock(starts[0]) : '')));
     });
     $('center').replaceChildren(
@@ -483,6 +493,14 @@
   }
 
   function render() {
+    // redrawing replaces the lists, which would send each one back to the top: remember where they were scrolled
+    var scrolls = {};
+    ['todo', 'current', 'done'].forEach(function (t) {
+      var box = document.querySelector('#tray-' + t + ' .inner');
+      if (box) scrolls[t] = box.scrollTop;
+    });
+    var deskBox = $('desk');
+    var deskTop = deskBox ? deskBox.scrollTop : 0;
     // remember where every slip is, so each one can glide to its new place
     var before = {};
     document.querySelectorAll('.slip[data-id]').forEach(function (el) { before[el.getAttribute('data-id')] = el.getBoundingClientRect(); });
@@ -501,6 +519,11 @@
     if (old) old.remove();
     var d = dialog();
     if (d) document.body.appendChild(d);
+    ['todo', 'current', 'done'].forEach(function (t) {
+      var box = document.querySelector('#tray-' + t + ' .inner');
+      if (box && scrolls[t]) box.scrollTop = scrolls[t];
+    });
+    if (deskBox && deskTop) deskBox.scrollTop = deskTop;
 
     var wasPrinting = printing;
     printing = false;
@@ -614,6 +637,11 @@
     });
   }, 15000);
 
+  // any touch, wheel, scroll or key press holds back the next background refresh for a few seconds
+  ['pointerdown', 'touchstart', 'touchmove', 'wheel', 'keydown'].forEach(function (ev) {
+    document.addEventListener(ev, function () { lastTouch = Date.now(); }, { capture: true, passive: true });
+  });
+  document.addEventListener('scroll', function () { lastTouch = Date.now(); }, { capture: true, passive: true }); // scroll does not bubble
   // keep it in sync all the time: every 20 seconds, and whenever you come back to the tab
   setInterval(function () { if (document.visibilityState === 'visible') { refresh(false); music.sync(); } }, 20000);
   document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') { refresh(false); music.sync(); } });

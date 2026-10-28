@@ -19,6 +19,8 @@ import {
   canStop,
   choosePlan,
   createApi,
+  daySignature,
+  planAfterRefresh,
   formatClock,
   mergeServerDay,
   normalizeTask,
@@ -131,6 +133,23 @@ describe('site: helpers', () => {
     expect(choosePlan([mk('A', false), mk('B', false)], 'B')).toBe('B');
     expect(choosePlan([mk('B', false)], 'A')).toBe('B');
     expect(choosePlan([], 'A')).toBe('A');
+  });
+
+  it('never changes the tab he is on when a background refresh arrives, even if the other plan has more ticks', () => {
+    const mk = (plan, done) => task({ id: plan + done + Math.random(), plan, done });
+    const day = [mk('A', true), mk('A', true), mk('B', false)];
+    expect(planAfterRefresh(day, 'B', false, null)).toBe('B'); // he is on B; A has more done; stay on B
+    expect(planAfterRefresh(day, 'B', true, null)).toBe('A'); // only the very first load picks by check-offs
+    expect(planAfterRefresh(day, 'A', true, 'B')).toBe('B'); // ...or goes back to the tab he chose earlier today
+    expect(planAfterRefresh([mk('A', false)], 'B', false, null)).toBe('A'); // his plan vanished: fall back
+    expect(planAfterRefresh(day, 'A', true, 'C')).toBe('A'); // a saved plan that does not exist is ignored
+  });
+
+  it('fingerprints the server day so an unchanged refresh can be skipped', () => {
+    const day = { date: '2026-10-27', tasks: [task({ id: 'a' })], headline: 'h', sections: [], rating: null };
+    expect(daySignature(day)).toBe(daySignature({ ...day, tasks: [task({ id: 'a' })] }));
+    expect(daySignature(day)).not.toBe(daySignature({ ...day, tasks: [task({ id: 'a', done: true })] }));
+    expect(daySignature(day)).not.toBe(daySignature({ ...day, rating: 3 }));
   });
 
   it('keeps local copies of tasks with a change in flight when merging a refresh', () => {
