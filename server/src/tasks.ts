@@ -549,8 +549,8 @@ export function normalizeTitle(title: string): string {
   return title.trim().toLowerCase();
 }
 
-/** A task whose notes start with this is his own checklist item: re-publishing a plan never removes it. */
-export const KEEP_MARK = '[kept]';
+/** A task whose notes start with this (`[kept]` or `[kept until YYYY-MM-DD]`) is his own checklist item: re-publishing a plan never removes it. */
+export const KEEP_MARK = '[kept';
 
 export function isKept(task: { notes: string | null }): boolean {
   return (task.notes ?? '').startsWith(KEEP_MARK);

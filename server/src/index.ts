@@ -9,6 +9,7 @@ import { runningTask } from './running';
 import { slippingSection } from './slipping';
 import { parsePrefixes, reconcile, type SyncConfig } from './sync';
 import { ValidationError, parseGym, parseMusic, parsePatch, parseRating, type Task, type TaskStore } from './tasks';
+import { carriedKept } from './kept';
 
 export interface Env {
   DB: D1Database;
@@ -229,10 +230,11 @@ async function handleInner(
     if (path === '/api/tasks') {
       if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405);
       const date = resolveDate(url.searchParams.get('date'), timeZone, now);
-      const [tasks, info, rating] = await Promise.all([store.list(date), store.getDayInfo(date), store.getRating(date)]);
-      await reconcile(store, tasks, sync); // pull in anything he ticked on the site
+      const [own, info, rating] = await Promise.all([store.list(date), store.getDayInfo(date), store.getRating(date)]);
+      await reconcile(store, own, sync); // pull in anything he ticked on the site
       const isToday = date === plannerToday(timeZone, now);
-      const slip = isToday ? await slippingSection(store, date, tasks, await isCalcRestDay(sync, date)) : null;
+      const slip = isToday ? await slippingSection(store, date, own, await isCalcRestDay(sync, date)) : null;
+      const tasks = [...own, ...(await carriedKept(store, date, timeZone))]; // his checklist items from earlier days that are still due
       return json({
         date,
         headline: info.headline,

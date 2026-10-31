@@ -55,6 +55,7 @@ import {
   type Task,
   type TaskStore,
 } from './tasks';
+import { carriedKept } from './kept';
 
 const SUPPORTED_VERSIONS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 const SERVER_INFO = { name: 'cozy-planner', version: '1.0.0' };
@@ -1327,7 +1328,7 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
       const date = resolveDate(args.date, timeZone, now);
       const plan = parsePlan(args.plan);
       // his own checklist items (notes start with [kept]) stay put; a published task with the same title would only duplicate one
-      const keptTitles = new Set((await store.list(date)).filter((t) => t.plan === plan && isKept(t)).map((t) => normalizeTitle(t.title)));
+      const keptTitles = new Set([...(await store.list(date)).filter(isKept), ...(await carriedKept(store, date, timeZone))].filter((t) => t.plan === plan).map((t) => normalizeTitle(t.title)));
       const parsed = parseNewTasks(args.tasks).filter((t) => !keptTitles.has(normalizeTitle(t.title)));
       checkSiteKeys(parsed.map((t) => t.siteKey), ctx);
       await checkCommitments(parsed.map((t) => t.commitment), ctx);
@@ -1363,8 +1364,9 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
     }
     case 'list_tasks': {
       const date = resolveDate(args.date, timeZone, now);
-      const all = await store.list(date);
-      await reconcile(store, all, ctx.sync);
+      const own = await store.list(date);
+      await reconcile(store, own, ctx.sync);
+      const all = [...own, ...(await carriedKept(store, date, timeZone))]; // his checklist items from earlier days that are still due
       // No plan asked for: show the one he followed (most checked off, A on a tie), or the only one that exists.
       const totals = planTotals(all);
       const plan = args.plan === undefined || args.plan === null
