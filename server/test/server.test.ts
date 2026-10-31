@@ -230,6 +230,17 @@ describe('mcp tools', () => {
     expect(again.data.done).toBe(1);
   });
 
+  it('never removes his [kept] checklist items when a plan is published again or cleared', async () => {
+    await tool('add_task', { title: 'Finish essay', notes: '[kept] checklist' });
+    await tool('add_task', { title: 'Plain add' });
+    const again = await tool('set_daily_plan', { tasks: [{ title: 'Calc 3' }, { title: 'finish ESSAY' }] });
+    expect(again.data.tasks.map((t: any) => t.title).sort()).toEqual(['Calc 3', 'Finish essay']);
+    expect(again.data.kept).toBe(1);
+    expect(again.data.total).toBe(2);
+    const cleared = await tool('set_daily_plan', { tasks: [] });
+    expect(cleared.data.tasks.map((t: any) => t.title)).toEqual(['Finish essay']);
+  });
+
   it('keeps days separate and can clear one', async () => {
     await tool('set_daily_plan', { date: '2026-10-05', tasks: [{ title: 'Later' }] });
     await tool('set_daily_plan', { tasks: [{ title: 'Now' }] });

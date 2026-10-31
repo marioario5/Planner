@@ -4,6 +4,7 @@ import {
   type GymSession,
   type TaskEvent,
   closePauseAt,
+  isKept,
   nextPause,
   normalizeTitle,
   type Commitment,
@@ -64,7 +65,7 @@ export class MemoryTaskStore implements TaskStore {
   async replaceDay(date: string, plan: Plan, tasks: NewTask[]): Promise<Task[]> {
     const mine = (await this.list(date)).filter((t) => t.plan === plan);
     const previous = new Map(mine.map((t) => [normalizeTitle(t.title), t]));
-    this.tasks = this.tasks.filter((t) => !(t.date === date && t.plan === plan));
+    this.tasks = this.tasks.filter((t) => !(t.date === date && t.plan === plan) || isKept(t));
     tasks.forEach((t, i) => {
       const old = previous.get(normalizeTitle(t.title));
       this.insert(date, plan, t, i, old?.done === true, old?.doneAt ?? null, old?.startedAt ?? null, old?.flaggedAt ?? null, old?.pausedAt ?? null, old?.pausedMs ?? 0);

@@ -35,6 +35,8 @@ import {
   USER_NOTE_KINDS,
   USER_NOTE_STATUSES,
   ValidationError,
+  isKept,
+  normalizeTitle,
   parseCommitmentId,
   parseDayInfo,
   parseHabitNotes,
@@ -1324,7 +1326,9 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
     case 'set_daily_plan': {
       const date = resolveDate(args.date, timeZone, now);
       const plan = parsePlan(args.plan);
-      const parsed = parseNewTasks(args.tasks);
+      // his own checklist items (notes start with [kept]) stay put; a published task with the same title would only duplicate one
+      const keptTitles = new Set((await store.list(date)).filter((t) => t.plan === plan && isKept(t)).map((t) => normalizeTitle(t.title)));
+      const parsed = parseNewTasks(args.tasks).filter((t) => !keptTitles.has(normalizeTitle(t.title)));
       checkSiteKeys(parsed.map((t) => t.siteKey), ctx);
       await checkCommitments(parsed.map((t) => t.commitment), ctx);
       await store.replaceDay(date, plan, parsed);
@@ -1336,8 +1340,10 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
       const orders = (await loadDirectives(store)).orders;
       const dayType = await dayTypeFor(ctx, date, all.filter((t) => t.plan === plan), orders);
       const planDirectives = date >= plannerToday(timeZone, now) && parsed.length > 0 ? checkDirectives(date, all.filter((t) => t.plan === plan), orders) : null; // clearing a plan is not a plan
+      const kept = all.filter((t) => t.plan === plan && isKept(t)).length;
       return {
         ...published,
+        ...(kept ? { kept, kept_note: 'These are his own checklist items. They stay in the plan and are not part of what you sent, so total = tasks you sent + kept.' } : {}),
         ...(check ? { framework_check: check } : {}),
         ...(dayType ? { day_type_check: dayType } : {}),
         ...(planDirectives && planDirectives.broken.length

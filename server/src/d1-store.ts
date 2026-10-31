@@ -1,6 +1,7 @@
 import { checkSchema, type SchemaReport } from './schema-check';
 import {
   normalizeTag,
+  KEEP_MARK,
   normalizeTitle,
   type Commitment,
   type Experiment,
@@ -151,7 +152,9 @@ export class D1TaskStore implements TaskStore {
     }
 
     const now = new Date().toISOString();
-    const statements = [this.db.prepare('DELETE FROM tasks WHERE date = ? AND plan = ?').bind(date, plan)];
+    const statements = [
+      this.db.prepare("DELETE FROM tasks WHERE date = ? AND plan = ? AND COALESCE(notes, '') NOT LIKE ? ESCAPE '\\'").bind(date, plan, `${KEEP_MARK.replace(/[\\%_]/g, '\\$&')}%`),
+    ];
     tasks.forEach((task, position) => {
       const old = previous.get(normalizeTitle(task.title));
       const done = old?.done === true;

@@ -225,7 +225,7 @@ export interface TaskStore {
   /** Tasks from `from` through `to` inclusive, ordered by date then like `list`. */
   listRange(from: string, to: string): Promise<Task[]>;
   add(date: string, plan: Plan, task: NewTask): Promise<Task>;
-  /** Replaces one plan's list for a day (the other plan is untouched). Tasks whose title matches one already done stay done. */
+  /** Replaces one plan's list for a day (the other plan is untouched). Tasks whose title matches one already done stay done. Tasks marked kept (see `isKept`) are never removed. */
   replaceDay(date: string, plan: Plan, tasks: NewTask[]): Promise<Task[]>;
   update(id: string, patch: TaskPatch): Promise<Task | null>;
   remove(id: string): Promise<boolean>;
@@ -547,6 +547,13 @@ export function parseId(value: unknown): string {
 
 export function normalizeTitle(title: string): string {
   return title.trim().toLowerCase();
+}
+
+/** A task whose notes start with this is his own checklist item: re-publishing a plan never removes it. */
+export const KEEP_MARK = '[kept]';
+
+export function isKept(task: { notes: string | null }): boolean {
+  return (task.notes ?? '').startsWith(KEEP_MARK);
 }
 
 /**
