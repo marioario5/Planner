@@ -269,6 +269,24 @@ const TOOLS = [
     annotations: { readOnlyHint: true },
   },
   {
+    name: 'add_gym_session',
+    description:
+      'Records a gym session after the fact, for when he forgot to switch it on or off in the app. He says when it was; do not guess the times. ' +
+      '`start` and `end` are 24-hour HH:MM on the planner day `date` (default today; times from 00:00 to 03:59 belong to the morning after, as everywhere else). ' +
+      'If a session already starts at that same minute (for example one he forgot to switch off) it is given this end time instead of a duplicate being added; a session that overlaps a different one is refused. ' +
+      'Saying the same thing twice changes nothing. The session then appears in get_gym_sessions and is treated like one from the app.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+        start: { type: 'string', pattern: '^([01]\\d|2[0-3]):[0-5]\\d$' },
+        end: { type: 'string', pattern: '^([01]\\d|2[0-3]):[0-5]\\d$' },
+      },
+      required: ['start', 'end'],
+    },
+    annotations: { destructiveHint: false, idempotentHint: true },
+  },
+  {
     name: 'get_directives',
     description:
       'The standing orders the weekly review decided from the data (for example "weekday Plan A starts at 17:00", "normal-day work cap 120 minutes", "dinner 20:30"). They are decided facts: apply them as written without re-deriving them. ' +
@@ -1403,6 +1421,28 @@ async function callTool(name: string, args: Json, ctx: McpContext): Promise<Json
           open: g.endedAt === null,
         })),
       };
+    }
+    case 'add_gym_session': {
+      const date = resolveDate(args.date, timeZone, now);
+      const hhmm = /^([01]\d|2[0-3]):[0-5]\d$/;
+      if (typeof args.start !== 'string' || !hhmm.test(args.start)) throw new ValidationError('start must be a 24-hour time such as "17:57"');
+      if (typeof args.end !== 'string' || !hhmm.test(args.end)) throw new ValidationError('end must be a 24-hour time such as "19:20"');
+      const startMs = plannerTimeToEpoch(date, args.start, timeZone);
+      const endMs = plannerTimeToEpoch(date, args.end, timeZone);
+      if (endMs <= startMs) throw new ValidationError('end must be after start');
+      const nowMs = (now ?? new Date()).getTime();
+      if (endMs > nowMs) throw new ValidationError('that session has not finished yet: end is in the future');
+      const existing = await store.listGym(new Date(startMs - 24 * 3600 * 1000).toISOString());
+      const sameStart = existing.find((g) => Math.abs(Date.parse(g.startedAt) - startMs) < 60000);
+      const clash = existing.find((g) => g !== sameStart && Date.parse(g.startedAt) < endMs && (g.endedAt === null ? nowMs : Date.parse(g.endedAt)) > startMs);
+      if (clash) {
+        throw new ValidationError(`overlaps a session already recorded (${localTime(clash.startedAt, timeZone)} to ${clash.endedAt ? localTime(clash.endedAt, timeZone) : 'still open'} on ${localDate(clash.startedAt, timeZone)}); ask him which is right`);
+      }
+      const wasOpen = sameStart ? sameStart.endedAt === null : false;
+      const session = { id: sameStart?.id ?? `manual-${date}-${args.start.replace(':', '')}`, startedAt: new Date(sameStart ? Date.parse(sameStart.startedAt) : startMs).toISOString(), endedAt: new Date(endMs).toISOString() };
+      await store.saveGym(session);
+      await store.logEvent({ taskId: null, title: null, source: 'planner tool (Claude)', change: JSON.stringify({ gym_session_added: `${date} ${args.start}-${args.end}` }) });
+      return { saved: true, closed_open_session: wasOpen, date, start: args.start, end: args.end, minutes: Math.round((endMs - startMs) / 60000) };
     }
     case 'get_task_log': {
       const limit = typeof args.limit === 'number' ? Math.min(200, Math.max(1, Math.floor(args.limit))) : 40;
