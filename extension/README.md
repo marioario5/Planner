@@ -7,7 +7,7 @@ music experiment can see what is watched. Nothing is sent while nothing plays, a
 
 1. Open `about:debugging#/runtime/this-firefox`.
 2. Click **Load Temporary Add-on** and pick `extension/manifest.json`.
-3. The add-on's settings page opens. Enter the planner address and the API token (the same ones the website uses), then **Save and test**.
+3. The settings page opens by itself the first time (or click the add-on's toolbar button). Enter the planner address and the API token (the same ones the website uses), then **Save and test**.
 
 ## Keep it permanently
 
