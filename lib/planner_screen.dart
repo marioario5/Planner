@@ -139,7 +139,7 @@ class _PlannerScreenState extends State<PlannerScreen>
     with TickerProviderStateMixin, WidgetsBindingObserver {
 
   final GymTracker _gym = GymTracker(send: TasksService.putGym);
-  // The music experiment: the printer's pink button toggles YouTube mode. Recorded like the gym switch, offline first.
+  // The music experiment: the printer's button shows YouTube mode, which the Firefox extension sets through the server.
   final GymTracker _music = GymTracker(name: 'music', send: TasksService.putMusic, fetchCurrent: TasksService.getMusicCurrent);
   Timer? _gymTimer; // once a minute: refresh the elapsed time and retry anything unsent
 
@@ -216,15 +216,6 @@ class _PlannerScreenState extends State<PlannerScreen>
     HapticFeedback.mediumImpact();
     final done = _gym.toggle();
     setState(() {}); // the switch flips at once, before anything is sent
-    await done;
-    if (mounted) setState(() {});
-  }
-
-  /// The printer button steps through: pink (nothing) -> blue (YouTube browsing) -> green (YouTube lecture) -> pink.
-  Future<void> _toggleMusic() async {
-    HapticFeedback.selectionClick();
-    final done = _music.advance(const ['browsing', 'lecture']);
-    setState(() {}); // the button flips at once, before anything is sent
     await done;
     if (mounted) setState(() {});
   }
@@ -583,10 +574,8 @@ class _PlannerScreenState extends State<PlannerScreen>
                   // Long-press the printer to change the server or
                   // disconnect — keeps the UI free of a settings button.
                   onLongPress: _showConnectDialog,
-                  // The printer's button steps through YouTube mode: pink (off), blue (browsing), green (lecture).
-                  onTapUp: (d) {
-                    if (hitsPinkButton(d.localPosition)) _toggleMusic();
-                  },
+                  // The printer's button is a status light only (pink = off, blue = browsing, green = lecture); the Firefox
+                  // extension sets it through the server and it is picked up by the once-a-minute sync.
                   child: AnimatedBuilder(
                     animation: _lightController,
                     builder: (_, __) => CustomPaint(

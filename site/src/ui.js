@@ -617,11 +617,8 @@
   startGrid();
   addDecorations();
   startPrinter($('printer'), function () { return music.mode(); });
-  // the printer's button: pink (nothing) -> blue (YouTube browsing) -> green (YouTube lecture) -> pink
-  $('printer').addEventListener('click', function (e) {
-    var r = this.getBoundingClientRect();
-    if (hitsPinkButton(((e.clientX - r.left) * 320) / r.width, ((e.clientY - r.top) * 108) / r.height, 20)) music.advance(MUSIC_ORDER);
-  });
+  // the printer's button is a status light only: pink (nothing), blue (YouTube browsing), green (YouTube lecture).
+  // The Firefox extension decides which, through the server; it cannot be tapped.
   music.sync();
   document.addEventListener('pointermove', onMove, { passive: false });
   document.addEventListener('pointerup', function (e) { endDrag(e, false); });
