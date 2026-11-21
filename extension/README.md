@@ -19,6 +19,7 @@ Release Firefox only keeps add-ons that Mozilla has signed. Signing an add-on fo
 
 ## How it works
 
-- `content.js` (runs on youtube.com) checks every 5 seconds whether a video is really playing, and reports it every 15 seconds while it plays.
-- `background.js` groups the reports into a session and, after 5 minutes of nothing playing, tells the server the session is over.
+- `content.js` (runs on youtube.com) checks every 5 seconds whether a video is really playing, reports it every 10 seconds while it plays, and reports at once when it is paused.
+- `background.js` groups the reports into a session; after 15 minutes of nothing playing it tells the server the session is over.
+- The light (pink/blue/green) goes off 30 seconds after the last report, so a pause shows within about 30 seconds, while a pause shorter than 15 minutes still counts as one sitting.
 - The server (`PUT /api/watch/:id`) opens YouTube mode when the first video plays, sets the mode (lecture or browsing) from the title and channel, and closes it when playback stops. A YouTube mode switched on by hand in the app is never touched.

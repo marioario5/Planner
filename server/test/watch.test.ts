@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { handleRequest } from '../src/index';
-import { classifyVideo } from '../src/watch';
+import { classifyVideo, expandAutoSessions, sessionMakeup } from '../src/watch';
 import { MemoryTaskStore } from './memory-store';
 
 const env = { API_TOKEN: 'a'.repeat(40), MUSIC_TOKEN: 'm'.repeat(40), PLANNER_TZ: 'America/Los_Angeles' } as any;
@@ -14,7 +14,7 @@ const current = async (store: MemoryTaskStore) =>
   ((await (await handleRequest(new Request('https://x/api/music/current', { headers: planner }), env, store, now)).json()) as any).current;
 const video = (o: Record<string, unknown> = {}) => ({
   session: 'yt-1', video: 'abc123', title: 'Funny cat compilation', channel: 'Cats Inc',
-  started: '2026-10-21T02:40:00Z', ended: '2026-10-21T02:55:00Z', watched: 900, ...o,
+  started: '2026-10-21T02:40:00Z', ended: '2026-10-21T02:59:50Z', watched: 900, ...o,
 });
 
 describe('classifyVideo: lecture or browsing, guessed from the title and channel', () => {
@@ -41,7 +41,7 @@ describe('PUT /api/watch/:id keeps YouTube mode on by itself', () => {
   it('switches to lecture when a lecture plays, and closes the session on final', async () => {
     const store = new MemoryTaskStore();
     await put(store, 'w1', video());
-    await put(store, 'w2', video({ video: 'zzz', title: 'Calc 3: surface integrals', started: '2026-10-21T02:50:00Z', ended: '2026-10-21T02:58:00Z', watched: 400 }));
+    await put(store, 'w2', video({ video: 'zzz', title: 'Calc 3: surface integrals', started: '2026-10-21T02:50:00Z', ended: '2026-10-21T02:59:55Z', watched: 400 }));
     expect(await current(store)).toMatchObject({ id: 'yt-1', mode: 'lecture' });
     await put(store, 'w2', video({ video: 'zzz', title: 'Calc 3: surface integrals', started: '2026-10-21T02:50:00Z', ended: '2026-10-21T02:58:30Z', watched: 430, final: true }));
     expect(await current(store)).toBeNull();
@@ -77,6 +77,28 @@ describe('PUT /api/watch/:id keeps YouTube mode on by itself', () => {
     expect(await current(stale)).toBeNull();
   });
 
+  it('turns the light off 30 seconds after the last report, while the session carries on for up to 15 minutes', async () => {
+    const store = new MemoryTaskStore();
+    await put(store, 'w1', video({ ended: '2026-10-21T02:59:40Z' })); // 20 seconds ago: playing
+    expect(await current(store)).toMatchObject({ id: 'yt-1' });
+    const paused = new MemoryTaskStore();
+    await put(paused, 'w1', video({ ended: '2026-10-21T02:59:10Z' })); // 50 seconds ago: paused
+    expect(await current(paused)).toBeNull();
+    expect(paused.music[0]).toMatchObject({ id: 'yt-1', endedAt: null }); // still the same sitting
+    const gone = new MemoryTaskStore();
+    await put(gone, 'w1', video({ started: '2026-10-21T02:30:00Z', ended: '2026-10-21T02:40:00Z' })); // 20 minutes ago: the sitting is over
+    expect(await current(gone)).toBeNull();
+    expect(gone.music[0].endedAt).toBe('2026-10-21T02:40:00.000Z');
+  });
+
+  it('shows the mode of the video playing now, not of the whole session', async () => {
+    const store = new MemoryTaskStore();
+    await put(store, 'w1', video({ title: 'Calc 3: Stokes theorem', started: '2026-10-21T02:30:00Z', ended: '2026-10-21T02:45:00Z' }));
+    await put(store, 'w2', video({ video: 'v2' })); // a cat video now
+    expect(await current(store)).toMatchObject({ id: 'yt-1', mode: 'browsing' });
+    expect(store.music[0].mode).toBe('lecture'); // the session as a whole had a lecture in it
+  });
+
   it('rejects bad input and the music token (only the planner token may write)', async () => {
     const store = new MemoryTaskStore();
     expect((await put(store, 'w1', video({ started: 'nope' }))).status).toBe(400);
@@ -106,5 +128,27 @@ describe('get_watch_log on the music endpoint', () => {
     expect(data.top_channels[0]).toMatchObject({ channel: 'Cats Inc', minutes: 17, videos: 2, mostly: 'browsing' });
     expect(data.minutes_by_start_hour).toEqual({ '19': 22 });
     expect(data.recent[0].title).toBe('Funny cat compilation');
+  });
+});
+
+describe('pauses inside a session', () => {
+  const row = (id: string, started: string, ended: string, watchedS: number) => ({
+    id, sessionId: 'yt-1', videoId: 'v', title: 't', channel: 'c', durationS: null, startedAt: started, endedAt: ended, watchedS, mode: 'browsing' as const,
+  });
+  const watches = [
+    row('a', '2026-10-21T01:00:00.000Z', '2026-10-21T01:10:00.000Z', 600),
+    row('b', '2026-10-21T01:12:00.000Z', '2026-10-21T01:20:00.000Z', 480), // a 2-minute pause
+    row('c', '2026-10-21T01:20:10.000Z', '2026-10-21T01:25:00.000Z', 290), // a 10-second gap: not a pause
+  ];
+  it('counts the pauses of 30 seconds or more, and the minutes really played', () => {
+    expect(sessionMakeup('yt-1', watches)).toEqual({ playing_minutes: 22.8, pauses: 1, paused_minutes: 2 });
+  });
+  it('counts YouTube as on only while a video played: one span per stretch, hand-made sessions untouched', () => {
+    const sessions = [
+      { id: 'yt-1', startedAt: '2026-10-21T01:00:00.000Z', endedAt: '2026-10-21T01:25:00.000Z', mode: 'browsing' as const },
+      { id: 'w1', startedAt: '2026-10-20T10:00:00.000Z', endedAt: '2026-10-20T11:00:00.000Z', mode: 'lecture' as const },
+    ];
+    const spans = expandAutoSessions(sessions, watches);
+    expect(spans.map((x) => x.id)).toEqual(['a', 'b', 'c', 'w1']);
   });
 });

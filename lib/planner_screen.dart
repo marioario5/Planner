@@ -142,6 +142,7 @@ class _PlannerScreenState extends State<PlannerScreen>
   // The music experiment: the printer's button shows YouTube mode, which the Firefox extension sets through the server.
   final GymTracker _music = GymTracker(name: 'music', send: TasksService.putMusic, fetchCurrent: TasksService.getMusicCurrent);
   Timer? _gymTimer; // once a minute: refresh the elapsed time and retry anything unsent
+  Timer? _lightTimer; // every 15 seconds: the YouTube-mode light follows what the server says
 
   late AnimationController _lightController;
   late AnimationController _feedController;
@@ -183,6 +184,10 @@ class _PlannerScreenState extends State<PlannerScreen>
       await _gym.flush();
       await _music.sync();
       if (mounted) setState(() {});
+    });
+    _lightTimer = Timer.periodic(const Duration(seconds: 15), (_) async {
+      final changed = await _music.sync();
+      if (changed && mounted) setState(() {});
     });
     _loadVerse();
     _loadTicks();
@@ -259,6 +264,7 @@ class _PlannerScreenState extends State<PlannerScreen>
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
     _gymTimer?.cancel();
+    _lightTimer?.cancel();
     _lightController.dispose();
     _feedController.dispose();
     super.dispose();

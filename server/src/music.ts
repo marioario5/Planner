@@ -6,7 +6,7 @@
 // The phone app's pink printer button toggles "YouTube mode"; each stretch is recorded as a session (same offline-safe sync as the
 // gym switch). Here the sessions are laid over his finished tasks to see which blocks ran with YouTube and which in silence.
 
-import { settleAutoSessions, summarizeWatch } from './watch';
+import { AUTO_PREFIX, expandAutoSessions, sessionMakeup, settleAutoSessions, summarizeWatch } from './watch';
 import { plannerToday, shiftDate, plannerTimeToEpoch } from './dates';
 import { evaluateExperiments, finishedDays } from './habits';
 import { setExperiments, type ExperimentIO, type McpContext } from './mcp';
@@ -356,8 +356,10 @@ async function callMusicTool(name: string, args: Json, ctx: McpContext): Promise
       // Tapping through the colors leaves stretches shorter than a minute (pink to green passes blue); they say nothing, so they are left out.
       const real = sessions.filter((s) => s.endedAt === null || Date.parse(s.endedAt) - Date.parse(s.startedAt) >= 30_000);
       const dayNotes = notesIn(await loadNotes(store), shiftDate(today, -days), today);
+      const watches = await store.listWatch(new Date(plannerTimeToEpoch(shiftDate(today, -days), '00:00', timeZone)).toISOString());
       return {
         window_days: days,
+        note_sessions: 'A session is one sitting: videos with pauses of up to 15 minutes between them. For sessions the Firefox extension recorded, `playing_minutes` is the time a video really played and `pauses` counts the pauses of 30 seconds or more inside it (`paused_minutes` in total); `minutes` is the whole span.',
         left_out_blips: sessions.length - real.length,
         ...(dayNotes.length ? { notes: dayNotes } : {}),
         sessions: real.map((s) => {
@@ -369,6 +371,7 @@ async function callMusicTool(name: string, args: Json, ctx: McpContext): Promise
             end: s.endedAt ? timeOf(Date.parse(s.endedAt), timeZone) : null,
             minutes: s.endedAt ? Math.round((Date.parse(s.endedAt) - start) / 60_000) : null,
             open: s.endedAt === null,
+            ...(s.id.startsWith(AUTO_PREFIX) ? sessionMakeup(s.id, watches) : {}),
           };
         }),
       };
@@ -382,7 +385,9 @@ async function callMusicTool(name: string, args: Json, ctx: McpContext): Promise
         store.listMusic(new Date(plannerTimeToEpoch(shiftDate(from, -1), '00:00', timeZone)).toISOString()),
       ]);
       const dayNotes = notesIn(await loadNotes(store), from, today);
-      return { ...computeMusicStats(all, sessions, timeZone, today, days, nowDate.getTime()), ...(dayNotes.length ? { day_notes: dayNotes } : {}) };
+      const watches = await store.listWatch(new Date(plannerTimeToEpoch(shiftDate(from, -1), '00:00', timeZone)).toISOString());
+      // YouTube counts as on only while a video was really playing (pauses of 30 seconds or more are off), not for the whole session
+      return { ...computeMusicStats(all, expandAutoSessions(sessions, watches), timeZone, today, days, nowDate.getTime()), ...(dayNotes.length ? { day_notes: dayNotes } : {}) };
     }
     case 'get_music_notes': {
       const days = parseDays(args.days, 28, 1);

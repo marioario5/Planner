@@ -5,7 +5,7 @@ import { isCalcRestDay, loadCalcSource } from './calc-source';
 import { FirebaseSite, parseResets } from './firebase';
 import { handleMcpPost } from './mcp';
 import { handleMusicMcpPost } from './music';
-import { putWatch, settleAutoSessions } from './watch';
+import { currentMode, putWatch } from './watch';
 import { runningTask } from './running';
 import { slippingSection } from './slipping';
 import { parsePrefixes, reconcile, type SyncConfig } from './sync';
@@ -187,14 +187,7 @@ async function handleInner(
       // What YouTube mode is right now, so the phone app and the website show the same state.
       if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405);
       const nowDate = now ?? new Date();
-      await settleAutoSessions(store, nowDate.getTime()); // a session the extension opened ends when playback has stopped for a while
-      const recent = await store.listMusic(new Date(nowDate.getTime() - 3 * 86_400_000).toISOString());
-      // The latest session that is still open: a short closed stretch (tapping through the colors) must not hide an older one that is on.
-      const latest = [...recent].reverse().find((s) => s.endedAt === null && nowDate.getTime() - Date.parse(s.startedAt) < 12 * 3_600_000); // one left on for half a day is a forgotten switch, not a mode
-      return json({
-        now: nowDate.toISOString(),
-        current: latest && latest.endedAt === null ? { id: latest.id, started: latest.startedAt, mode: latest.mode ?? 'browsing' } : null,
-      });
+      return json({ now: nowDate.toISOString(), current: await currentMode(store, nowDate.getTime()) });
     }
 
     if (path.startsWith('/api/music/')) {

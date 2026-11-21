@@ -643,5 +643,6 @@
   setInterval(function () { if (document.visibilityState === 'visible') { refresh(false); music.sync(); } }, 20000);
   document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') { refresh(false); music.sync(); } });
   window.addEventListener('focus', function () { refresh(false); music.sync(); });
+  setInterval(function () { if (document.visibilityState === 'visible') music.sync(); }, 10000); // the light follows playback within about 40 seconds
   window.addEventListener('online', function () { refresh(false); music.sync(); });
 })();

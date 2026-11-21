@@ -7,8 +7,10 @@ import { parseWatch, type GymSession, type MusicMode, type TaskStore, type Watch
 
 /** A session this module opened is called `yt-...`; a session he switched on in the app is never touched. */
 export const AUTO_PREFIX = 'yt-';
-/** Playback that stops for this long ends the session at the last moment a video was seen playing. */
-export const IDLE_MS = 10 * 60_000;
+/** A session spans pauses: playback that stops for this long ends it, at the last moment a video was seen playing. */
+export const IDLE_MS = 15 * 60_000;
+/** The light (YouTube mode on right now) goes off this long after the last report; a playing video reports every 10 seconds. */
+export const LIVE_MS = 30_000;
 
 const LECTURE_CHANNELS = [
   'khan academy', 'professor leonard', 'the organic chemistry tutor', '3blue1brown', 'patrickjmt', 'mit opencourseware',
@@ -34,6 +36,24 @@ export async function settleAutoSessions(store: TaskStore, nowMs: number): Promi
     const last = watches.filter((w) => w.sessionId === s.id).reduce((m, w) => (w.endedAt > m ? w.endedAt : m), s.startedAt);
     if (nowMs - Date.parse(last) > IDLE_MS) await store.saveMusic({ ...s, endedAt: last });
   }
+}
+
+/**
+ * What YouTube mode is right now, for the light. A session he switched on by hand is on until he switches it off. A session the
+ * extension opened is on only while a video was seen playing in the last LIVE_MS (a pause turns the light off within 30 seconds,
+ * though the session itself carries on for up to IDLE_MS so one sitting stays one session), and shows the mode of the video playing.
+ */
+export async function currentMode(store: TaskStore, nowMs: number): Promise<{ id: string; started: string; mode: MusicMode } | null> {
+  await settleAutoSessions(store, nowMs);
+  const recent = await store.listMusic(new Date(nowMs - 3 * 86_400_000).toISOString());
+  // the latest session still open: a short closed stretch must not hide an older one that is on; one left on for half a day is a forgotten switch
+  const open = [...recent].reverse().find((s) => s.endedAt === null && nowMs - Date.parse(s.startedAt) < 12 * 3_600_000);
+  if (!open) return null;
+  if (!open.id.startsWith(AUTO_PREFIX)) return { id: open.id, started: open.startedAt, mode: open.mode ?? 'browsing' };
+  const watches = (await store.listWatch(new Date(Date.parse(open.startedAt) - 1000).toISOString())).filter((w) => w.sessionId === open.id);
+  const last = watches.reduce<WatchRecord | null>((m, w) => (!m || w.endedAt > m.endedAt ? w : m), null);
+  if (!last || nowMs - Date.parse(last.endedAt) > LIVE_MS) return null;
+  return { id: open.id, started: open.startedAt, mode: last.mode };
 }
 
 /** PUT /api/watch/:id: save what the extension saw and keep the YouTube-mode session in step with it. */
@@ -62,6 +82,42 @@ export async function putWatch(store: TaskStore, id: string, body: unknown, nowM
   return { ...watch, final };
 }
 
+/**
+ * For the stats: a session the extension opened counts as YouTube on only while a video was playing. Its watch rows are the
+ * stretches of playing (a pause of 30 seconds or more ends one), so the pauses inside the session are not counted as on.
+ * Sessions he switched on by hand stay as they are.
+ */
+export function expandAutoSessions(sessions: GymSession[], watches: WatchRecord[]): GymSession[] {
+  const out: GymSession[] = [];
+  for (const s of sessions) {
+    if (!s.id.startsWith(AUTO_PREFIX)) {
+      out.push(s);
+      continue;
+    }
+    for (const w of watches) if (w.sessionId === s.id) out.push({ id: w.id, startedAt: w.startedAt, endedAt: w.endedAt, mode: w.mode });
+  }
+  return out;
+}
+
+/** What a session was made of: the minutes a video really played, and the pauses of 30 seconds or more inside it. */
+export function sessionMakeup(sessionId: string, watches: WatchRecord[]): { playing_minutes: number; pauses: number; paused_minutes: number } {
+  const rows = watches.filter((w) => w.sessionId === sessionId).sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+  let paused = 0;
+  let pauses = 0;
+  for (let i = 1; i < rows.length; i++) {
+    const gap = Date.parse(rows[i].startedAt) - Date.parse(rows[i - 1].endedAt);
+    if (gap >= 30_000) {
+      pauses++;
+      paused += gap;
+    }
+  }
+  return {
+    playing_minutes: round1(rows.reduce((n, w) => n + w.watchedS, 0) / 60),
+    pauses,
+    paused_minutes: round1(paused / 60_000),
+  };
+}
+
 // ---------------------------------------------------------------- the analysis the music tools return
 
 const localDate = (iso: string, timeZone: string): string =>
@@ -69,10 +125,26 @@ const localDate = (iso: string, timeZone: string): string =>
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
+/** The latest 40 videos, each stretch of the same video within a session merged into one line. */
+function recentVideos(rows: WatchRecord[], timeZone: string) {
+  const merged = new Map<string, { date: string; start: string; title: string; channel: string; seconds: number; mode: MusicMode; at: string }>();
+  for (const w of rows) {
+    const key = `${w.sessionId}|${w.videoId}`;
+    const cur = merged.get(key);
+    if (cur) cur.seconds += w.watchedS;
+    else merged.set(key, { date: localDate(w.startedAt, timeZone), start: localTime(w.startedAt, timeZone), title: w.title, channel: w.channel, seconds: w.watchedS, mode: w.mode, at: w.startedAt });
+  }
+  return [...merged.values()].sort((a, b) => (a.at < b.at ? 1 : -1)).slice(0, 40).map(({ at, ...v }) => v);
+}
+
 /** What he watches: totals, favourite channels, the hours he watches, and the recent videos. */
 export function summarizeWatch(all: WatchRecord[], timeZone: string, today: string, days: number) {
   const from = plannerTimeToEpoch(shiftDate(today, -days), '00:00', timeZone);
-  const real = all.filter((w) => Date.parse(w.startedAt) >= from && w.watchedS >= 30);
+  const inWindow = all.filter((w) => Date.parse(w.startedAt) >= from);
+  // one video can be several stretches (he paused it): it counts once it has played 30 seconds in all
+  const playedIn = new Map<string, number>();
+  for (const w of inWindow) playedIn.set(w.videoId, (playedIn.get(w.videoId) ?? 0) + w.watchedS);
+  const real = inWindow.filter((w) => (playedIn.get(w.videoId) ?? 0) >= 30);
   const minutes = (secs: number) => round1(secs / 60);
 
   const byMode: Record<string, number> = {};
@@ -100,13 +172,6 @@ export function summarizeWatch(all: WatchRecord[], timeZone: string, today: stri
       .slice(0, 15)
       .map(([channel, c]) => ({ channel, minutes: minutes(c.s), videos: c.videos.size, mostly: c.lecture * 2 >= c.s ? 'lecture' : 'browsing' })),
     minutes_by_start_hour: Object.fromEntries(Object.entries(byHour).sort().map(([k, v]) => [k, minutes(v)])),
-    recent: real.slice(-40).reverse().map((w) => ({
-      date: localDate(w.startedAt, timeZone),
-      start: localTime(w.startedAt, timeZone),
-      title: w.title,
-      channel: w.channel,
-      minutes: minutes(w.watchedS),
-      mode: w.mode,
-    })),
+    recent: recentVideos(real, timeZone).map(({ seconds, ...v }) => ({ ...v, minutes: minutes(seconds) })),
   };
 }
