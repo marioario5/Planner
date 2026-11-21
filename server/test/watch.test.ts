@@ -64,6 +64,19 @@ describe('PUT /api/watch/:id keeps YouTube mode on by itself', () => {
     expect(store.watches).toHaveLength(1);
   });
 
+  it('still shows the open session when a short closed stretch started after it, and ignores one left on for half a day', async () => {
+    const store = new MemoryTaskStore();
+    await put(store, 'w1', video());
+    await store.saveMusic({ id: 'blip', startedAt: '2026-10-21T02:50:00.000Z', endedAt: '2026-10-21T02:50:01.000Z', mode: 'lecture' }); // tapping through the colors
+    expect(await current(store)).toMatchObject({ id: 'yt-1' });
+    const hours7 = new MemoryTaskStore();
+    await hours7.saveMusic({ id: 'seven-hours', startedAt: '2026-10-20T20:00:00.000Z', endedAt: null, mode: 'browsing' });
+    expect(await current(hours7)).toMatchObject({ id: 'seven-hours' });
+    const stale = new MemoryTaskStore();
+    await stale.saveMusic({ id: 'ancient', startedAt: '2026-10-20T10:00:00.000Z', endedAt: null, mode: 'browsing' }); // 17 hours
+    expect(await current(stale)).toBeNull();
+  });
+
   it('rejects bad input and the music token (only the planner token may write)', async () => {
     const store = new MemoryTaskStore();
     expect((await put(store, 'w1', video({ started: 'nope' }))).status).toBe(400);

@@ -189,7 +189,8 @@ async function handleInner(
       const nowDate = now ?? new Date();
       await settleAutoSessions(store, nowDate.getTime()); // a session the extension opened ends when playback has stopped for a while
       const recent = await store.listMusic(new Date(nowDate.getTime() - 3 * 86_400_000).toISOString());
-      const latest = recent[recent.length - 1];
+      // The latest session that is still open: a short closed stretch (tapping through the colors) must not hide an older one that is on.
+      const latest = [...recent].reverse().find((s) => s.endedAt === null && nowDate.getTime() - Date.parse(s.startedAt) < 12 * 3_600_000); // one left on for half a day is a forgotten switch, not a mode
       return json({
         now: nowDate.toISOString(),
         current: latest && latest.endedAt === null ? { id: latest.id, started: latest.startedAt, mode: latest.mode ?? 'browsing' } : null,
