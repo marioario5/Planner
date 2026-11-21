@@ -47,6 +47,20 @@ export interface GymSession {
   mode?: MusicMode;
 }
 
+/** One stretch of one YouTube video, reported by the Firefox extension while it plays. */
+export interface WatchRecord {
+  id: string;
+  sessionId: string; // the YouTube-mode session this belongs to
+  videoId: string;
+  title: string;
+  channel: string;
+  durationS: number | null; // length of the video, when known
+  startedAt: string; // ISO
+  endedAt: string; // ISO: the last time it was seen playing
+  watchedS: number; // seconds actually played
+  mode: MusicMode; // worked out by the server from the title and channel
+}
+
 /** browsing = just watching videos; lecture = following along with something, like a Calc 3 lecture. */
 export const MUSIC_MODES = ['browsing', 'lecture'] as const;
 export type MusicMode = (typeof MUSIC_MODES)[number];
@@ -245,6 +259,9 @@ export interface TaskStore {
   /** The music experiment's YouTube-mode stretches (same shape as gym sessions; kept apart from everything the planner reads). */
   saveMusic(s: GymSession): Promise<void>;
   listMusic(fromIso: string): Promise<GymSession[]>;
+  /** The videos the Firefox extension saw playing (kept with the music experiment, never read by the planner). */
+  saveWatch(w: WatchRecord): Promise<void>;
+  listWatch(fromIso: string): Promise<WatchRecord[]>;
   listMusicExperiments(): Promise<Experiment[]>;
   saveMusicExperiment(e: Experiment): Promise<void>;
   deleteMusicExperiment(id: string): Promise<boolean>;
@@ -528,6 +545,45 @@ export function parseMusic(id: string, body: unknown): GymSession {
     throw new ValidationError(`mode must be one of: ${MUSIC_MODES.join(', ')}`);
   }
   return { ...session, mode: (mode as MusicMode | undefined) ?? 'browsing' };
+}
+
+/** Body of PUT /api/watch/:id from the extension. `final: true` means playback has stopped for a while, so the session ends. */
+export function parseWatch(id: string, body: unknown): { record: Omit<WatchRecord, 'mode'>; final: boolean } {
+  if (!/^[A-Za-z0-9_-]{1,64}$/.test(id)) throw new ValidationError('watch id must be 1 to 64 letters, digits, - or _');
+  const r = (body ?? {}) as Record<string, unknown>;
+  const text = (v: unknown, what: string, max: number): string => {
+    if (typeof v !== 'string' || v.trim() === '') throw new ValidationError(`${what} must be a non-empty string`);
+    return v.trim().slice(0, max);
+  };
+  const iso = (v: unknown, what: string): string => {
+    const ms = typeof v === 'string' ? Date.parse(v) : NaN;
+    if (Number.isNaN(ms)) throw new ValidationError(`${what} must be an ISO time such as 2026-10-11T18:30:00Z`);
+    return new Date(ms).toISOString();
+  };
+  const sessionId = text(r.session, 'session', 64);
+  if (!/^[A-Za-z0-9_-]+$/.test(sessionId)) throw new ValidationError('session must be letters, digits, - or _');
+  const startedAt = iso(r.started, 'started');
+  const endedAt = iso(r.ended, 'ended');
+  if (endedAt < startedAt) throw new ValidationError('ended is before started');
+  const num = (v: unknown, what: string): number | null => {
+    if (v === undefined || v === null) return null;
+    if (typeof v !== 'number' || !Number.isFinite(v) || v < 0 || v > 86400) throw new ValidationError(`${what} must be a number of seconds from 0 to 86400`);
+    return Math.round(v);
+  };
+  return {
+    record: {
+      id,
+      sessionId,
+      videoId: text(r.video, 'video', 40),
+      title: text(r.title, 'title', 300),
+      channel: typeof r.channel === 'string' && r.channel.trim() ? r.channel.trim().slice(0, 120) : 'unknown channel',
+      durationS: num(r.duration, 'duration'),
+      startedAt,
+      endedAt,
+      watchedS: num(r.watched, 'watched') ?? 0,
+    },
+    final: r.final === true,
+  };
 }
 
 export function parseRating(value: unknown): number | null {

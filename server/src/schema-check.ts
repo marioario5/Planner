@@ -45,6 +45,7 @@ const STEPS: Step[] = [
   { migration: '0012_gym_sessions', script: 'db:gym:remote', tables: ['gym_sessions'] },
   { migration: '0013_music', script: 'db:music:remote', tables: ['music_sessions', 'music_experiments'] },
   { migration: '0014_music_mode', script: 'db:musicmode:remote', otherColumns: ['music_sessions.mode'] },
+  { migration: '0015_watch_log', script: 'db:watch:remote', tables: ['watch_log'] },
 ];
 
 /** `tables` = every table in the database; `taskColumns` = every column of `tasks`. */

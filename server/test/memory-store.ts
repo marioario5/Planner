@@ -2,6 +2,7 @@ import { SCHEMA_OK, type SchemaReport } from '../src/schema-check';
 import {
   TASK_EVENTS_KEPT,
   type GymSession,
+  type WatchRecord,
   type TaskEvent,
   closePauseAt,
   isKept,
@@ -149,6 +150,18 @@ export class MemoryTaskStore implements TaskStore {
 
   async listMusic(fromIso: string): Promise<GymSession[]> {
     return this.music.filter((g) => g.startedAt >= fromIso).sort((a, b) => a.startedAt.localeCompare(b.startedAt));
+  }
+
+  watches: WatchRecord[] = [];
+
+  async saveWatch(w: WatchRecord): Promise<void> {
+    const cur = this.watches.find((x) => x.id === w.id);
+    if (cur) Object.assign(cur, { ...w, startedAt: cur.startedAt });
+    else this.watches.push({ ...w });
+  }
+
+  async listWatch(fromIso: string): Promise<WatchRecord[]> {
+    return this.watches.filter((w) => w.startedAt >= fromIso).sort((a, b) => a.startedAt.localeCompare(b.startedAt));
   }
 
   async listMusicExperiments(): Promise<Experiment[]> {

@@ -6,6 +6,7 @@
 // The phone app's pink printer button toggles "YouTube mode"; each stretch is recorded as a session (same offline-safe sync as the
 // gym switch). Here the sessions are laid over his finished tasks to see which blocks ran with YouTube and which in silence.
 
+import { settleAutoSessions, summarizeWatch } from './watch';
 import { plannerToday, shiftDate, plannerTimeToEpoch } from './dates';
 import { evaluateExperiments, finishedDays } from './habits';
 import { setExperiments, type ExperimentIO, type McpContext } from './mcp';
@@ -182,6 +183,14 @@ const TOOLS = [
     annotations: { readOnlyHint: true },
   },
   {
+    name: 'get_watch_log',
+    description:
+      'The YouTube videos he actually watched, reported by the Firefox extension: total minutes, minutes per mode (lecture or browsing, a guess from the title and channel), his top channels, the hours he starts watching, and the 40 most recent videos with title and channel. ' +
+      'It only counts a video once 30 seconds have played. Use it to see what he likes to watch and when; it says nothing about why. Optional `days` (default 14, max 90).',
+    inputSchema: { type: 'object', properties: { days: { type: 'integer', minimum: 1, maximum: 90 } } },
+    annotations: { readOnlyHint: true },
+  },
+  {
     name: 'get_music_stats',
     description:
       'How his work blocks went in silence, with YouTube browsing on, and with a YouTube lecture on: per mode (and per subject where there are enough blocks) the median real time as a share of planned, ' +
@@ -335,7 +344,13 @@ async function callMusicTool(name: string, args: Json, ctx: McpContext): Promise
   };
 
   switch (name) {
+    case 'get_watch_log': {
+      const days = parseDays(args.days, 14, 1);
+      const from = new Date(plannerTimeToEpoch(shiftDate(today, -days), '00:00', timeZone)).toISOString();
+      return summarizeWatch(await store.listWatch(from), timeZone, today, days);
+    }
     case 'get_music_sessions': {
+      await settleAutoSessions(store, nowDate.getTime());
       const days = parseDays(args.days, 14, 1);
       const sessions = await store.listMusic(new Date(plannerTimeToEpoch(shiftDate(today, -days), '00:00', timeZone)).toISOString());
       // Tapping through the colors leaves stretches shorter than a minute (pink to green passes blue); they say nothing, so they are left out.
@@ -359,6 +374,7 @@ async function callMusicTool(name: string, args: Json, ctx: McpContext): Promise
       };
     }
     case 'get_music_stats': {
+      await settleAutoSessions(store, nowDate.getTime());
       const days = parseDays(args.days, 28, 7);
       const from = shiftDate(today, -days);
       const [all, sessions] = await Promise.all([

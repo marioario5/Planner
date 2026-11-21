@@ -54,10 +54,10 @@ describe('the YouTube-mode switch (PUT /api/music/:id)', () => {
 });
 
 describe('the separate music MCP endpoint', () => {
-  it('has its own six tools, and the planner endpoint has none of them', async () => {
+  it('has its own seven tools, and the planner endpoint has none of them', async () => {
     const store = new MemoryTaskStore();
     const m = (await rpc(store, '/music/mcp', music)('tools/list')).body.result.tools.map((t: any) => t.name);
-    expect(m).toEqual(['get_music_sessions', 'get_music_stats', 'get_music_notes', 'set_music_notes', 'get_music_experiments', 'set_music_experiments']);
+    expect(m).toEqual(['get_music_sessions', 'get_watch_log', 'get_music_stats', 'get_music_notes', 'set_music_notes', 'get_music_experiments', 'set_music_experiments']);
     const p = (await rpc(store, '/mcp', planner)('tools/list')).body.result.tools.map((t: any) => t.name);
     expect(p.filter((n: string) => n.includes('music'))).toEqual([]);
     const info = (await rpc(store, '/music/mcp', music)('initialize', { protocolVersion: '2025-06-18' })).body.result;

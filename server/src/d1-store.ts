@@ -18,6 +18,7 @@ import {
   type HabitVersion,
   type NewTask,
   type GymSession,
+  type WatchRecord,
   type MusicMode,
   type TaskEvent,
   TASK_EVENTS_KEPT,
@@ -353,6 +354,33 @@ export class D1TaskStore implements TaskStore {
         .bind(fromIso)
         .all<{ id: string; started_at: string; ended_at: string | null; mode: string }>();
       return results.map((r) => ({ id: r.id, startedAt: r.started_at, endedAt: r.ended_at, mode: (r.mode === 'lecture' ? 'lecture' : 'browsing') as MusicMode }));
+    } catch {
+      return []; // table not migrated yet
+    }
+  }
+
+  async saveWatch(w: WatchRecord): Promise<void> {
+    await this.db
+      .prepare(
+        `INSERT INTO watch_log (id, session_id, video_id, title, channel, duration_s, started_at, ended_at, watched_s, mode, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON CONFLICT(id) DO UPDATE SET title = excluded.title, channel = excluded.channel, duration_s = excluded.duration_s,
+           ended_at = excluded.ended_at, watched_s = excluded.watched_s, mode = excluded.mode, updated_at = excluded.updated_at`,
+      )
+      .bind(w.id, w.sessionId, w.videoId, w.title, w.channel, w.durationS, w.startedAt, w.endedAt, w.watchedS, w.mode, new Date().toISOString())
+      .run();
+  }
+
+  async listWatch(fromIso: string): Promise<WatchRecord[]> {
+    try {
+      const { results } = await this.db
+        .prepare('SELECT id, session_id, video_id, title, channel, duration_s, started_at, ended_at, watched_s, mode FROM watch_log WHERE started_at >= ? ORDER BY started_at')
+        .bind(fromIso)
+        .all<{ id: string; session_id: string; video_id: string; title: string; channel: string; duration_s: number | null; started_at: string; ended_at: string; watched_s: number; mode: string }>();
+      return results.map((r) => ({
+        id: r.id, sessionId: r.session_id, videoId: r.video_id, title: r.title, channel: r.channel, durationS: r.duration_s,
+        startedAt: r.started_at, endedAt: r.ended_at, watchedS: r.watched_s, mode: (r.mode === 'lecture' ? 'lecture' : 'browsing') as MusicMode,
+      }));
     } catch {
       return []; // table not migrated yet
     }

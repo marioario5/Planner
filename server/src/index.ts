@@ -5,6 +5,7 @@ import { isCalcRestDay, loadCalcSource } from './calc-source';
 import { FirebaseSite, parseResets } from './firebase';
 import { handleMcpPost } from './mcp';
 import { handleMusicMcpPost } from './music';
+import { putWatch, settleAutoSessions } from './watch';
 import { runningTask } from './running';
 import { slippingSection } from './slipping';
 import { parsePrefixes, reconcile, type SyncConfig } from './sync';
@@ -41,7 +42,7 @@ function allowedOrigins(env: Pick<Env, 'ALLOWED_ORIGINS'>): string[] {
     .filter(Boolean);
 }
 
-const isApiPath = (path: string) => path === '/api/rating' || path.startsWith('/api/music/') || path === '/api/running' || path.startsWith('/api/gym/') || path === '/api/tasks' || path.startsWith('/api/tasks/');
+const isApiPath = (path: string) => path === '/api/rating' || path.startsWith('/api/music/') || path.startsWith('/api/watch/') || path === '/api/running' || path.startsWith('/api/gym/') || path === '/api/tasks' || path.startsWith('/api/tasks/');
 
 /**
  * Lets the planner website (a different origin) call the app API. Only origins on the allow list get CORS headers, so
@@ -92,6 +93,7 @@ const apiView = (t: Task) => ({
  *   PATCH  /api/tasks/:id  {done?, started?, paused?, flagged?, title?, tag?, start?, minutes?, notes?, restoreStarted?, restoreCompleted?, restorePausedMs?}
  *   PUT    /api/music/:id  {started, ended?, mode?}  YouTube-mode switch (browsing | lecture) (the music experiment; idempotent)
  *   GET    /api/music/current  whether YouTube mode is on right now ({current: {id, started, mode} | null})
+ *   PUT    /api/watch/:id  {session, video, title, channel, duration?, started, ended, watched, final?}  a YouTube video the Firefox extension saw playing; opens, moves and closes the YouTube-mode session by itself
  *   POST   /music/mcp[/<token>]  the music experiment's own MCP endpoint (MUSIC_TOKEN or API_TOKEN)
  *   PUT    /api/gym/:id    {started, ended?}  gym switch (idempotent; the id is made by the app)
  *   GET    /api/running    the task in progress (title, tag, planned minutes, worked time); READ_TOKEN may call only this
@@ -138,7 +140,7 @@ async function handleInner(
 
   const isMcp = path === '/mcp' || path.startsWith('/mcp/');
   const isMusicMcp = path === '/music/mcp' || path.startsWith('/music/mcp/');
-  const isApi = path === '/api/tasks' || path.startsWith('/api/tasks/') || path === '/api/rating' || path.startsWith('/api/gym/') || path === '/api/running' || path.startsWith('/api/music/');
+  const isApi = path === '/api/tasks' || path.startsWith('/api/tasks/') || path === '/api/rating' || path.startsWith('/api/gym/') || path === '/api/running' || path.startsWith('/api/music/') || path.startsWith('/api/watch/');
   if (!isMcp && !isMusicMcp && !isApi) return json({ error: 'not found' }, 404);
 
   if (!tokenConfigured(env.API_TOKEN)) {
@@ -185,6 +187,7 @@ async function handleInner(
       // What YouTube mode is right now, so the phone app and the website show the same state.
       if (request.method !== 'GET') return json({ error: 'method not allowed' }, 405);
       const nowDate = now ?? new Date();
+      await settleAutoSessions(store, nowDate.getTime()); // a session the extension opened ends when playback has stopped for a while
       const recent = await store.listMusic(new Date(nowDate.getTime() - 3 * 86_400_000).toISOString());
       const latest = recent[recent.length - 1];
       return json({
@@ -203,6 +206,16 @@ async function handleInner(
       const session = parseMusic(musicId, body);
       await store.saveMusic(session);
       return json(session);
+    }
+
+    if (path.startsWith('/api/watch/')) {
+      // The Firefox extension reports each video while it plays; this keeps YouTube mode on by itself.
+      if (request.method !== 'PUT') return json({ error: 'method not allowed' }, 405);
+      const body = await request.json().catch(() => {
+        throw new ValidationError('body must be JSON');
+      });
+      const saved = await putWatch(store, decodeURIComponent(path.slice('/api/watch/'.length)), body, (now ?? new Date()).getTime());
+      return json({ id: saved.id, session: saved.sessionId, mode: saved.mode, final: saved.final });
     }
 
     if (path.startsWith('/api/gym/')) {
