@@ -99,6 +99,25 @@ describe('PUT /api/watch/:id keeps YouTube mode on by itself', () => {
     expect(store.music[0].mode).toBe('lecture'); // the session as a whole had a lecture in it
   });
 
+  it('a report that names a session already closed starts a new one, so playing never leaves the light off', async () => {
+    const store = new MemoryTaskStore();
+    await store.saveMusic({ id: 'yt-1', startedAt: '2026-10-21T01:00:00.000Z', endedAt: '2026-10-21T01:10:00.000Z', mode: 'browsing' });
+    expect((await put(store, 'w9', video({ started: '2026-10-21T02:55:00Z' }))).status).toBe(200); // names yt-1, which is closed
+    const cur = await current(store);
+    expect(cur).not.toBeNull();
+    expect(cur.id).not.toBe('yt-1');
+    expect(store.watches[0].sessionId).toBe(cur.id);
+    expect(store.music.find((s) => s.id === cur.id)).toMatchObject({ startedAt: '2026-10-21T02:55:00.000Z', endedAt: null });
+  });
+
+  it('the extension\'s session id is only a hint: reports join the session that is open', async () => {
+    const store = new MemoryTaskStore();
+    await put(store, 'w1', video({ session: 'yt-1' }));
+    await put(store, 'w2', video({ session: 'yt-2', video: 'v2', started: '2026-10-21T02:59:00Z' })); // the extension rotated its id, the sitting did not end
+    expect(store.music.filter((s) => s.id.startsWith('yt-'))).toHaveLength(1);
+    expect(store.watches.map((w) => w.sessionId)).toEqual(['yt-1', 'yt-1']);
+  });
+
   it('rejects bad input and the music token (only the planner token may write)', async () => {
     const store = new MemoryTaskStore();
     expect((await put(store, 'w1', video({ started: 'nope' }))).status).toBe(400);

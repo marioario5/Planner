@@ -61,23 +61,32 @@ export async function putWatch(store: TaskStore, id: string, body: unknown, nowM
   const { record, final } = parseWatch(id, body);
   await settleAutoSessions(store, nowMs);
   const mode = classifyVideo(record.title, record.channel);
-  const watch: WatchRecord = { ...record, mode };
-  await store.saveWatch(watch);
-
   const recent = await store.listMusic(new Date(nowMs - 3 * 86_400_000).toISOString());
   const manual = recent.find((s) => s.endedAt === null && !s.id.startsWith(AUTO_PREFIX));
-  if (!manual && record.sessionId.startsWith(AUTO_PREFIX)) {
-    const existing = recent.find((s) => s.id === record.sessionId);
-    if (!existing || existing.endedAt === null) {
-      const inSession = (await store.listWatch(new Date(Date.parse(existing?.startedAt ?? record.startedAt) - 1000).toISOString())).filter((w) => w.sessionId === record.sessionId);
-      const session: GymSession = {
-        id: record.sessionId,
-        startedAt: existing?.startedAt ?? record.startedAt,
-        endedAt: final ? record.endedAt : null,
-        mode: inSession.some((w) => w.mode === 'lecture') ? 'lecture' : 'browsing',
-      };
-      await store.saveMusic(session);
-    }
+  const openAuto = [...recent].reverse().find((s) => s.endedAt === null && s.id.startsWith(AUTO_PREFIX));
+
+  // The server owns which session a report belongs to (the extension's id is only a hint): the one still open, else a new one.
+  // A closed session is never reopened, so a report that names one starts a new session instead of playing on with the light off.
+  let sessionId = record.sessionId;
+  if (!manual) {
+    if (openAuto) sessionId = openAuto.id;
+    else if (!record.sessionId.startsWith(AUTO_PREFIX) || recent.some((s) => s.id === record.sessionId)) sessionId = `${AUTO_PREFIX}${id}`;
+  }
+  const watch: WatchRecord = { ...record, sessionId, mode };
+  await store.saveWatch(watch);
+
+  if (!manual && sessionId.startsWith(AUTO_PREFIX)) {
+    const existing = recent.find((s) => s.id === sessionId);
+    // a new session starts when this report's video started, but never before the previous session ended
+    const previousEnd = recent.filter((s) => s.id.startsWith(AUTO_PREFIX) && s.endedAt !== null).reduce((m, s) => (s.endedAt! > m ? s.endedAt! : m), '');
+    const startedAt = existing?.startedAt ?? (record.startedAt > previousEnd ? record.startedAt : previousEnd);
+    const inSession = (await store.listWatch(new Date(Date.parse(startedAt) - 1000).toISOString())).filter((w) => w.sessionId === sessionId);
+    await store.saveMusic({
+      id: sessionId,
+      startedAt,
+      endedAt: final ? record.endedAt : null,
+      mode: inSession.some((w) => w.mode === 'lecture') ? 'lecture' : 'browsing',
+    });
   }
   return { ...watch, final };
 }
